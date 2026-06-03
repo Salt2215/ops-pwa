@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ОПС Журнал">
+<meta name="theme-color" content="#0a0a14">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<title>ОПС Журнал</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0a0a14;
+  --bg2: #111120;
+  --bg3: #1a1a2e;
+  --border: #2a2a45;
+  --border2: #3a3a5a;
+  --accent: #4f7fff;
+  --accent2: #6b8fff;
+  --green: #2ecc71;
+  --yellow: #f39c12;
+  --red: #e74c3c;
+  --text: #e8e8f0;
+  --text2: #9090b0;
+  --text3: #5a5a7a;
+  --font: 'Golos Text', sans-serif;
+  --mono: 'JetBrains Mono', monospace;
+  --radius: 14px;
+  --radius-sm: 8px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: var(--font); }
+
+/* Layout */
+.app { display: flex; flex-direction: column; height: 100dvh; }
+.header { padding: 12px 16px 10px; background: var(--bg2); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+.header-left { display: flex; align-items: center; gap: 10px; }
+.header-icon { width: 32px; height: 32px; background: var(--accent); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 16px; }
+.header-title { font-size: 16px; font-weight: 600; color: var(--text); }
+.header-sub { font-size: 11px; color: var(--text3); margin-top: 1px; }
+.sync-btn { width: 34px; height: 34px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--text2); display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 16px; transition: all .2s; }
+.sync-btn:active { background: var(--bg3); }
+.sync-btn.syncing { animation: spin 1s linear infinite; color: var(--accent); }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.content { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.nav { display: grid; grid-template-columns: repeat(4, 1fr); background: var(--bg2); border-top: 1px solid var(--border); flex-shrink: 0; padding-bottom: env(safe-area-inset-bottom); }
+.nav-item { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 10px 4px; cursor: pointer; border: none; background: transparent; color: var(--text3); font-family: var(--font); font-size: 10px; transition: color .2s; }
+.nav-item.active { color: var(--accent); }
+.nav-item svg { width: 22px; height: 22px; }
+
+/* Screens */
+.screen { display: none; padding: 0; }
+.screen.active { display: block; }
+
+/* Cards */
+.card { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin: 12px 14px 0; }
+.card:last-child { margin-bottom: 12px; }
+.card-title { font-size: 13px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 10px; }
+
+/* Object cards */
+.obj-card { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; margin: 10px 14px 0; cursor: pointer; transition: border-color .2s; }
+.obj-card:active { border-color: var(--accent); }
+.obj-card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.obj-name { font-size: 15px; font-weight: 600; color: var(--text); }
+.status-pill { font-size: 11px; font-weight: 500; padding: 3px 9px; border-radius: 99px; }
+.status-active { background: rgba(46,204,113,.15); color: var(--green); }
+.status-paused { background: rgba(243,156,18,.15); color: var(--yellow); }
+.status-problem { background: rgba(231,76,60,.15); color: var(--red); }
+.status-done { background: rgba(144,144,176,.15); color: var(--text2); }
+.obj-meta { font-size: 12px; color: var(--text3); display: flex; gap: 12px; flex-wrap: wrap; }
+.obj-stat { display: flex; align-items: center; gap: 4px; }
+
+/* Form */
+.form-group { margin-bottom: 14px; }
+.form-label { font-size: 12px; color: var(--text2); margin-bottom: 6px; display: block; font-weight: 500; }
+.form-input, .form-textarea, .form-select {
+  width: 100%; background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text); font-family: var(--font); font-size: 14px; padding: 10px 12px;
+  outline: none; transition: border-color .2s;
+}
+.form-input:focus, .form-textarea:focus, .form-select:focus { border-color: var(--accent); }
+.form-textarea { resize: none; height: 90px; }
+.form-select option { background: var(--bg3); }
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+/* Buttons */
+.btn { width: 100%; padding: 13px; border-radius: var(--radius-sm); border: none; font-family: var(--font); font-size: 14px; font-weight: 600; cursor: pointer; transition: opacity .2s; }
+.btn:active { opacity: .8; }
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-secondary { background: var(--bg3); color: var(--text); border: 1px solid var(--border); }
+.btn-danger { background: rgba(231,76,60,.15); color: var(--red); border: 1px solid rgba(231,76,60,.3); }
+.btn-sm { width: auto; padding: 7px 14px; font-size: 13px; }
+
+/* Work entry */
+.entry-card { background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; margin-bottom: 8px; }
+.entry-date { font-size: 11px; color: var(--text3); font-family: var(--mono); margin-bottom: 4px; }
+.entry-text { font-size: 13px; color: var(--text); line-height: 1.5; }
+.entry-footer { display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
+.entry-tag { font-size: 11px; padding: 2px 8px; border-radius: 99px; background: rgba(79,127,255,.15); color: var(--accent2); }
+.entry-tag.problem { background: rgba(231,76,60,.15); color: var(--red); }
+.entry-pending { border-color: var(--yellow); }
+.entry-pending .entry-date::after { content: ' · ожидает синхронизации'; color: var(--yellow); }
+
+/* Quick actions */
+.quick-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 14px; }
+.quick-btn { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 12px; cursor: pointer; text-align: center; transition: border-color .2s; }
+.quick-btn:active { border-color: var(--accent); }
+.quick-btn-icon { font-size: 28px; margin-bottom: 6px; }
+.quick-btn-label { font-size: 13px; color: var(--text); font-weight: 500; }
+.quick-btn-sub { font-size: 11px; color: var(--text3); margin-top: 2px; }
+
+/* Stats */
+.stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.stat-card { background: var(--bg3); border-radius: var(--radius-sm); padding: 12px; text-align: center; }
+.stat-val { font-size: 24px; font-weight: 700; color: var(--text); font-family: var(--mono); }
+.stat-lbl { font-size: 11px; color: var(--text3); margin-top: 3px; }
+
+/* Progress bar */
+.progress-wrap { margin-top: 8px; }
+.progress-label { display: flex; justify-content: space-between; font-size: 11px; color: var(--text3); margin-bottom: 4px; }
+.progress-bar { height: 6px; background: var(--bg3); border-radius: 3px; overflow: hidden; }
+.progress-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width .4s; }
+
+/* Offline banner */
+.offline-banner { background: rgba(243,156,18,.15); border: 1px solid rgba(243,156,18,.3); border-radius: var(--radius-sm); padding: 10px 14px; margin: 12px 14px 0; display: none; align-items: center; gap: 8px; font-size: 13px; color: var(--yellow); }
+.offline-banner.show { display: flex; }
+
+/* Toast */
+.toast { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%) translateY(20px); background: var(--bg3); border: 1px solid var(--border2); border-radius: var(--radius-sm); padding: 10px 16px; font-size: 13px; color: var(--text); white-space: nowrap; opacity: 0; transition: all .3s; z-index: 999; pointer-events: none; }
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* FAB */
+.fab { position: fixed; bottom: calc(70px + env(safe-area-inset-bottom)); right: 16px; width: 52px; height: 52px; border-radius: 50%; background: var(--accent); border: none; color: #fff; font-size: 24px; cursor: pointer; box-shadow: 0 4px 20px rgba(79,127,255,.4); display: flex; align-items: center; justify-content: center; transition: transform .2s; z-index: 10; }
+.fab:active { transform: scale(.93); }
+
+/* Modal */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 100; display: none; align-items: flex-end; }
+.modal-overlay.show { display: flex; }
+.modal { background: var(--bg2); border-radius: var(--radius) var(--radius) 0 0; border: 1px solid var(--border); width: 100%; max-height: 85vh; overflow-y: auto; padding: 20px 16px calc(20px + env(safe-area-inset-bottom)); }
+.modal-handle { width: 36px; height: 4px; background: var(--border2); border-radius: 2px; margin: 0 auto 16px; }
+.modal-title { font-size: 17px; font-weight: 600; margin-bottom: 16px; }
+
+/* Section header */
+.section-header { padding: 16px 14px 8px; font-size: 13px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .06em; }
+
+/* Empty state */
+.empty { text-align: center; padding: 48px 20px; color: var(--text3); }
+.empty-icon { font-size: 40px; margin-bottom: 10px; }
+.empty-text { font-size: 14px; line-height: 1.5; }
+
+/* Problem badge */
+.prob-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 4px 10px; border-radius: 99px; margin-bottom: 8px; }
+.prob-open { background: rgba(231,76,60,.15); color: var(--red); }
+.prob-solved { background: rgba(46,204,113,.15); color: var(--green); }
+
+/* Photo grid */
+.photo-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; margin-top: 10px; }
+.photo-thumb { aspect-ratio: 1; background: var(--bg3); border-radius: 4px; overflow: hidden; cursor: pointer; }
+.photo-thumb img { width: 100%; height: 100%; object-fit: cover; }
+
+/* Pending count badge */
+.pending-badge { background: var(--yellow); color: #000; font-size: 10px; font-weight: 700; width: 16px; height: 16px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; margin-left: 4px; }
+
+scrollbar-width: none;
+</style>
+</head>
+<body>
+
+<div class="app">
+  <div class="header">
+    <div class="header-left">
+      <div class="header-icon">🔥</div>
+      <div>
+        <div class="header-title" id="headerTitle">ОПС Журнал</div>
+        <div class="header-sub" id="headerSub">Загрузка...</div>
+      </div>
+    </div>
+    <button class="sync-btn" id="syncBtn" onclick="syncAll()" title="Синхронизировать">↻</button>
+  </div>
+
+  <div class="offline-banner" id="offlineBanner">
+    ⚡ Офлайн — записи сохраняются локально
+  </div>
+
+  <div class="content" id="mainContent">
+    <!-- Dynamic content -->
+  </div>
+
+  <nav class="nav">
+    <button class="nav-item active" onclick="showScreen('home')" id="nav-home">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      Главная
+    </button>
+    <button class="nav-item" onclick="showScreen('objects')" id="nav-objects">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+      Объекты
+    </button>
+    <button class="nav-item" onclick="showScreen('journal')" id="nav-journal">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+      Журнал
+    </button>
+    <button class="nav-item" onclick="showScreen('profile')" id="nav-profile">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      Профиль
+    </button>
+  </nav>
+</div>
+
+<!-- FAB -->
+<button class="fab" id="fabBtn" onclick="showAddEntry()">+</button>
+
+<!-- Add Entry Modal -->
+<div class="modal-overlay" id="addEntryModal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title">📋 Внести работы</div>
+    <div class="form-group">
+      <label class="form-label">Объект</label>
+      <select class="form-select" id="entryObject"></select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Описание работ</label>
+      <textarea class="form-textarea" id="entryText" placeholder="Например: Протянули 150м КПСнг на 3 этаже, установили 12 дымовых датчиков..."></textarea>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Кабель (м)</label>
+        <input class="form-input" type="number" id="entryCable" placeholder="0">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Устройства (шт)</label>
+        <input class="form-input" type="number" id="entryDevices" placeholder="0">
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Проблема (если есть)</label>
+      <input class="form-input" id="entryProblem" placeholder="Нет стройготовности, нет лотков...">
+    </div>
+    <button class="btn btn-primary" onclick="saveEntry()" style="margin-bottom:10px">💾 Сохранить запись</button>
+    <button class="btn btn-secondary" onclick="closeModal('addEntryModal')">Отмена</button>
+  </div>
+</div>
+
+<!-- Add Object Modal -->
+<div class="modal-overlay" id="addObjectModal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title">🏗 Новый объект</div>
+    <div class="form-group">
+      <label class="form-label">Название</label>
+      <input class="form-input" id="objName" placeholder="ЖК Северный, БЦ Орбита...">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Адрес</label>
+      <input class="form-input" id="objAddress" placeholder="ул. Ленина, 15">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Заказчик</label>
+      <input class="form-input" id="objCustomer" placeholder="ООО СтройГрупп">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">План кабеля (м)</label>
+        <input class="form-input" type="number" id="objPlanCable" placeholder="0">
+      </div>
+      <div class="form-group">
+        <label class="form-label">План устройств</label>
+        <input class="form-input" type="number" id="objPlanDevices" placeholder="0">
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="saveObject()" style="margin-bottom:10px">✅ Создать объект</button>
+    <button class="btn btn-secondary" onclick="closeModal('addObjectModal')">Отмена</button>
+  </div>
+</div>
+
+<!-- Object Detail Modal -->
+<div class="modal-overlay" id="objectDetailModal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div id="objectDetailContent"></div>
+    <button class="btn btn-secondary" onclick="closeModal('objectDetailModal')" style="margin-top:10px">Закрыть</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ─── State ────────────────────────────────────────────────────────────────────
+const API_URL = window.location.origin;
+let state = {
+  user: JSON.parse(localStorage.getItem('ops_user') || 'null'),
+  objects: JSON.parse(localStorage.getItem('ops_objects') || '[]'),
+  entries: JSON.parse(localStorage.getItem('ops_entries') || '[]'),
+  pendingEntries: JSON.parse(localStorage.getItem('ops_pending') || '[]'),
+  currentScreen: 'home',
+  isOnline: navigator.onLine,
+};
+
+// ─── Offline detection ────────────────────────────────────────────────────────
+window.addEventListener('online',  () => { state.isOnline = true;  updateOfflineBanner(); syncAll(); });
+window.addEventListener('offline', () => { state.isOnline = false; updateOfflineBanner(); });
+
+function updateOfflineBanner() {
+  const banner = document.getElementById('offlineBanner');
+  banner.classList.toggle('show', !state.isOnline);
+  document.getElementById('headerSub').textContent = state.isOnline
+    ? (state.pendingEntries.length > 0 ? `${state.pendingEntries.length} записей ожидают синхронизации` : 'Онлайн')
+    : 'Офлайн — данные сохраняются';
+}
+
+// ─── Navigation ───────────────────────────────────────────────────────────────
+function showScreen(name) {
+  state.currentScreen = name;
+  document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+  document.getElementById(`nav-${name}`).classList.add('active');
+
+  const fab = document.getElementById('fabBtn');
+  fab.style.display = ['home','journal'].includes(name) ? 'flex' : 'none';
+
+  const titles = { home: 'ОПС Журнал', objects: 'Объекты', journal: 'Журнал работ', profile: 'Профиль' };
+  document.getElementById('headerTitle').textContent = titles[name];
+
+  renderScreen(name);
+}
+
+function renderScreen(name) {
+  const c = document.getElementById('mainContent');
+  if (name === 'home')    renderHome(c);
+  if (name === 'objects') renderObjects(c);
+  if (name === 'journal') renderJournal(c);
+  if (name === 'profile') renderProfile(c);
+}
+
+// ─── Home Screen ──────────────────────────────────────────────────────────────
+function renderHome(c) {
+  const today = new Date().toDateString();
+  const todayEntries = state.entries.filter(e => new Date(e.ts).toDateString() === today);
+  const pending = state.pendingEntries.length;
+  const openProblems = state.entries.filter(e => e.problem && e.problem.trim()).length;
+  const activeObjs = state.objects.filter(o => o.status === 'active').length;
+
+  c.innerHTML = `
+    <div style="padding:14px">
+      <div class="stats-grid" style="margin-bottom:12px">
+        <div class="stat-card">
+          <div class="stat-val">${activeObjs}</div>
+          <div class="stat-lbl">Активных объектов</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val">${todayEntries.length}</div>
+          <div class="stat-lbl">Записей сегодня</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val" style="color:${pending>0?'var(--yellow)':'var(--green)'}">${pending}</div>
+          <div class="stat-lbl">Ожидают синхронизации</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val" style="color:${openProblems>0?'var(--red)':'var(--green)'}">${openProblems}</div>
+          <div class="stat-lbl">Открытых проблем</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="quick-grid">
+      <div class="quick-btn" onclick="showAddEntry()">
+        <div class="quick-btn-icon">✍️</div>
+        <div class="quick-btn-label">Внести работы</div>
+        <div class="quick-btn-sub">Запись в журнал</div>
+      </div>
+      <div class="quick-btn" onclick="showScreen('objects')">
+        <div class="quick-btn-icon">🏗</div>
+        <div class="quick-btn-label">Объекты</div>
+        <div class="quick-btn-sub">${state.objects.length} объектов</div>
+      </div>
+      <div class="quick-btn" onclick="takePhoto()">
+        <div class="quick-btn-icon">📷</div>
+        <div class="quick-btn-label">Фото</div>
+        <div class="quick-btn-sub">Прикрепить к объекту</div>
+      </div>
+      <div class="quick-btn" onclick="reportProblem()">
+        <div class="quick-btn-icon">⚠️</div>
+        <div class="quick-btn-label">Проблема</div>
+        <div class="quick-btn-sub">Зафиксировать</div>
+      </div>
+    </div>
+
+    ${todayEntries.length > 0 ? `
+    <div class="section-header">Сегодня</div>
+    <div style="padding:0 14px">
+      ${todayEntries.slice(-3).reverse().map(e => entryCardHtml(e)).join('')}
+    </div>` : ''}
+  `;
+}
+
+// ─── Objects Screen ───────────────────────────────────────────────────────────
+function renderObjects(c) {
+  if (state.objects.length === 0) {
+    c.innerHTML = `
+      <div class="empty">
+        <div class="empty-icon">🏗</div>
+        <div class="empty-text">Объектов пока нет.<br>Добавьте первый объект.</div>
+      </div>
+      <div style="padding:0 14px">
+        <button class="btn btn-primary" onclick="showModal('addObjectModal')">+ Добавить объект</button>
+      </div>`;
+    return;
+  }
+
+  const statusLabels = { active:'В работе', paused:'Приостановлен', problem:'Проблема', done:'Завершён' };
+  c.innerHTML = `
+    <div style="padding:14px 14px 0">
+      <button class="btn btn-primary btn-sm" onclick="showModal('addObjectModal')">+ Новый объект</button>
+    </div>
+    ${state.objects.map(o => {
+      const entries = state.entries.filter(e => e.objectId === o.id);
+      const totalCable = entries.reduce((s, e) => s + (parseInt(e.cable)||0), 0);
+      const totalDevices = entries.reduce((s, e) => s + (parseInt(e.devices)||0), 0);
+      const pctCable = o.planCable > 0 ? Math.min(totalCable/o.planCable*100, 100) : 0;
+      return `
+      <div class="obj-card" onclick="showObjectDetail('${o.id}')">
+        <div class="obj-card-header">
+          <span class="obj-name">${o.name}</span>
+          <span class="status-pill status-${o.status}">${statusLabels[o.status]||o.status}</span>
+        </div>
+        <div class="obj-meta">
+          ${o.address ? `<span>📍 ${o.address}</span>` : ''}
+          <span>🔌 ${totalCable} м</span>
+          <span>📡 ${totalDevices} шт</span>
+        </div>
+        ${o.planCable > 0 ? `
+        <div class="progress-wrap">
+          <div class="progress-label"><span>Кабель</span><span>${totalCable}/${o.planCable} м</span></div>
+          <div class="progress-bar"><div class="progress-fill" style="width:${pctCable}%"></div></div>
+        </div>` : ''}
+      </div>`;
+    }).join('')}
+    <div style="height:14px"></div>
+  `;
+}
+
+// ─── Journal Screen ───────────────────────────────────────────────────────────
+function renderJournal(c) {
+  const all = [...state.entries, ...state.pendingEntries.map(e => ({...e, pending: true}))]
+    .sort((a,b) => b.ts - a.ts);
+
+  if (all.length === 0) {
+    c.innerHTML = `<div class="empty"><div class="empty-icon">📋</div><div class="empty-text">Журнал пуст.<br>Добавьте первую запись.</div></div>`;
+    return;
+  }
+
+  // Group by date
+  const groups = {};
+  all.forEach(e => {
+    const d = new Date(e.ts).toLocaleDateString('ru-RU', {day:'numeric',month:'long'});
+    if (!groups[d]) groups[d] = [];
+    groups[d].push(e);
+  });
+
+  c.innerHTML = Object.entries(groups).map(([date, entries]) => `
+    <div class="section-header">${date}</div>
+    <div style="padding:0 14px">
+      ${entries.map(e => entryCardHtml(e)).join('')}
+    </div>
+  `).join('') + '<div style="height:80px"></div>';
+}
+
+function entryCardHtml(e) {
+  const obj = state.objects.find(o => o.id === e.objectId);
+  const time = new Date(e.ts).toLocaleTimeString('ru-RU', {hour:'2-digit',minute:'2-digit'});
+  return `
+  <div class="entry-card ${e.pending?'entry-pending':''}">
+    <div class="entry-date">${time}${obj ? ' · ' + obj.name : ''}</div>
+    <div class="entry-text">${e.text}</div>
+    <div class="entry-footer">
+      ${e.cable > 0 ? `<span class="entry-tag">🔌 ${e.cable} м</span>` : ''}
+      ${e.devices > 0 ? `<span class="entry-tag">📡 ${e.devices} шт</span>` : ''}
+      ${e.problem ? `<span class="entry-tag problem">⚠️ ${e.problem}</span>` : ''}
+    </div>
+  </div>`;
+}
+
+// ─── Profile Screen ───────────────────────────────────────────────────────────
+function renderProfile(c) {
+  const totalCable = state.entries.reduce((s,e) => s+(parseInt(e.cable)||0), 0);
+  const totalDevices = state.entries.reduce((s,e) => s+(parseInt(e.devices)||0), 0);
+  const week = Date.now() - 7*24*3600*1000;
+  const weekEntries = state.entries.filter(e => e.ts > week);
+  const weekCable = weekEntries.reduce((s,e) => s+(parseInt(e.cable)||0), 0);
+
+  c.innerHTML = `
+    <div style="padding:14px">
+      <div class="card" style="text-align:center;margin:0 0 12px">
+        <div style="font-size:48px;margin-bottom:8px">👷</div>
+        <div style="font-size:18px;font-weight:600">${state.user?.name || 'Монтажник'}</div>
+        <div style="font-size:13px;color:var(--text3);margin-top:4px">${state.user?.role === 'admin' ? '👑 Администратор' : 'Монтажник'}</div>
+      </div>
+
+      <div class="card" style="margin:0 0 12px">
+        <div class="card-title">За всё время</div>
+        <div class="stats-grid">
+          <div class="stat-card"><div class="stat-val">${totalCable}</div><div class="stat-lbl">Метров кабеля</div></div>
+          <div class="stat-card"><div class="stat-val">${totalDevices}</div><div class="stat-lbl">Устройств</div></div>
+          <div class="stat-card"><div class="stat-val">${state.entries.length}</div><div class="stat-lbl">Записей</div></div>
+          <div class="stat-card"><div class="stat-val">${weekCable}</div><div class="stat-lbl">Метров за неделю</div></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin:0 0 12px">
+        <div class="card-title">Синхронизация</div>
+        <div style="font-size:13px;color:var(--text2);margin-bottom:10px">
+          Ожидают синхронизации: <strong style="color:${state.pendingEntries.length>0?'var(--yellow)':'var(--green)'}">${state.pendingEntries.length} записей</strong>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="syncAll()">↻ Синхронизировать сейчас</button>
+      </div>
+
+      <div class="card" style="margin:0">
+        <div class="card-title">Сервер</div>
+        <div style="font-size:13px;color:var(--text2);margin-bottom:10px">
+          Статус: <strong style="color:${state.isOnline?'var(--green)':'var(--red)'}">${state.isOnline?'Онлайн':'Офлайн'}</strong>
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="if(confirm('Выйти из аккаунта?')){localStorage.clear();location.reload()}">Выйти</button>
+      </div>
+    </div>
+  `;
+}
+
+// ─── Object Detail ────────────────────────────────────────────────────────────
+function showObjectDetail(id) {
+  const obj = state.objects.find(o => o.id === id);
+  if (!obj) return;
+  const entries = state.entries.filter(e => e.objectId === id).sort((a,b) => b.ts-a.ts);
+  const totalCable = entries.reduce((s,e) => s+(parseInt(e.cable)||0), 0);
+  const totalDevices = entries.reduce((s,e) => s+(parseInt(e.devices)||0), 0);
+  const problems = entries.filter(e => e.problem && e.problem.trim());
+  const statusLabels = { active:'В работе', paused:'Приостановлен', problem:'Проблема', done:'Завершён' };
+
+  document.getElementById('objectDetailContent').innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <div class="modal-title" style="margin:0">${obj.name}</div>
+      <span class="status-pill status-${obj.status}">${statusLabels[obj.status]}</span>
+    </div>
+    ${obj.address ? `<div style="font-size:13px;color:var(--text2);margin-bottom:12px">📍 ${obj.address}</div>` : ''}
+
+    <div class="stats-grid" style="margin-bottom:14px">
+      <div class="stat-card"><div class="stat-val">${totalCable}</div><div class="stat-lbl">Метров кабеля</div></div>
+      <div class="stat-card"><div class="stat-val">${totalDevices}</div><div class="stat-lbl">Устройств</div></div>
+    </div>
+
+    ${obj.planCable > 0 ? `
+    <div class="progress-wrap" style="margin-bottom:14px">
+      <div class="progress-label"><span>Прогресс кабеля</span><span>${totalCable}/${obj.planCable} м (${Math.round(totalCable/obj.planCable*100)}%)</span></div>
+      <div class="progress-bar"><div class="progress-fill" style="width:${Math.min(totalCable/obj.planCable*100,100)}%"></div></div>
+    </div>` : ''}
+
+    ${problems.length > 0 ? `
+    <div style="margin-bottom:14px">
+      <div class="card-title">Проблемы</div>
+      ${problems.map(e => `<div class="prob-badge prob-open">⚠️ ${e.problem}</div><br>`).join('')}
+    </div>` : ''}
+
+    <div class="card-title">История (последние 5)</div>
+    ${entries.slice(0,5).map(e => entryCardHtml(e)).join('') || '<div style="color:var(--text3);font-size:13px">Записей нет</div>'}
+
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button class="btn btn-primary btn-sm" onclick="closeModal('objectDetailModal');showAddEntryForObj('${id}')">+ Внести работы</button>
+      <select class="form-select" style="flex:1" onchange="changeObjStatus('${id}',this.value)">
+        <option value="active" ${obj.status==='active'?'selected':''}>🟢 В работе</option>
+        <option value="paused" ${obj.status==='paused'?'selected':''}>🟡 Пауза</option>
+        <option value="problem" ${obj.status==='problem'?'selected':''}>🔴 Проблема</option>
+        <option value="done" ${obj.status==='done'?'selected':''}>✅ Завершён</option>
+      </select>
+    </div>
+  `;
+  showModal('objectDetailModal');
+}
+
+function changeObjStatus(id, status) {
+  const obj = state.objects.find(o => o.id === id);
+  if (obj) { obj.status = status; saveLocal(); showToast('Статус обновлён'); }
+}
+
+// ─── Add Entry ────────────────────────────────────────────────────────────────
+function showAddEntry() {
+  const sel = document.getElementById('entryObject');
+  sel.innerHTML = state.objects.map(o => `<option value="${o.id}">${o.name}</option>`).join('');
+  if (state.objects.length === 0) {
+    showToast('Сначала создайте объект');
+    return;
+  }
+  showModal('addEntryModal');
+}
+
+function showAddEntryForObj(objId) {
+  showAddEntry();
+  setTimeout(() => { document.getElementById('entryObject').value = objId; }, 100);
+}
+
+function saveEntry() {
+  const text = document.getElementById('entryText').value.trim();
+  if (!text) { showToast('Введите описание работ'); return; }
+  const objId = document.getElementById('entryObject').value;
+  if (!objId) { showToast('Выберите объект'); return; }
+
+  const entry = {
+    id: Date.now().toString(),
+    objectId: objId,
+    text,
+    cable: parseInt(document.getElementById('entryCable').value) || 0,
+    devices: parseInt(document.getElementById('entryDevices').value) || 0,
+    problem: document.getElementById('entryProblem').value.trim(),
+    ts: Date.now(),
+    synced: false,
+  };
+
+  if (state.isOnline) {
+    // Try to sync immediately
+    syncEntry(entry).then(ok => {
+      if (ok) { state.entries.push({...entry, synced: true}); }
+      else { state.pendingEntries.push(entry); }
+      saveLocal(); updateOfflineBanner();
+    });
+  } else {
+    state.pendingEntries.push(entry);
+    saveLocal(); updateOfflineBanner();
+  }
+
+  // Clear form
+  document.getElementById('entryText').value = '';
+  document.getElementById('entryCable').value = '';
+  document.getElementById('entryDevices').value = '';
+  document.getElementById('entryProblem').value = '';
+  closeModal('addEntryModal');
+  showToast(state.isOnline ? '✅ Запись сохранена' : '💾 Сохранено офлайн');
+  renderScreen(state.currentScreen);
+}
+
+// ─── Save Object ──────────────────────────────────────────────────────────────
+function saveObject() {
+  const name = document.getElementById('objName').value.trim();
+  if (!name) { showToast('Введите название'); return; }
+
+  const obj = {
+    id: Date.now().toString(),
+    name,
+    address: document.getElementById('objAddress').value.trim(),
+    customer: document.getElementById('objCustomer').value.trim(),
+    planCable: parseInt(document.getElementById('objPlanCable').value) || 0,
+    planDevices: parseInt(document.getElementById('objPlanDevices').value) || 0,
+    status: 'active',
+    ts: Date.now(),
+  };
+  state.objects.push(obj);
+  saveLocal();
+  syncObjects();
+
+  document.getElementById('objName').value = '';
+  document.getElementById('objAddress').value = '';
+  document.getElementById('objCustomer').value = '';
+  document.getElementById('objPlanCable').value = '';
+  document.getElementById('objPlanDevices').value = '';
+  closeModal('addObjectModal');
+  showToast('✅ Объект создан');
+  renderScreen(state.currentScreen);
+}
+
+// ─── Report Problem ───────────────────────────────────────────────────────────
+function reportProblem() {
+  const prob = prompt('Опишите проблему:');
+  if (!prob || !prob.trim()) return;
+  if (state.objects.length === 0) { showToast('Сначала создайте объект'); return; }
+  const obj = state.objects[0];
+  const entry = {
+    id: Date.now().toString(),
+    objectId: obj.id,
+    text: `⚠️ Проблема зафиксирована`,
+    cable: 0, devices: 0,
+    problem: prob.trim(),
+    ts: Date.now(), synced: false,
+  };
+  state.pendingEntries.push(entry);
+  saveLocal(); updateOfflineBanner();
+  showToast('⚠️ Проблема зафиксирована');
+  renderScreen(state.currentScreen);
+}
+
+// ─── Photo ────────────────────────────────────────────────────────────────────
+function takePhoto() {
+  if (state.objects.length === 0) { showToast('Сначала создайте объект'); return; }
+  const input = document.createElement('input');
+  input.type = 'file'; input.accept = 'image/*'; input.capture = 'environment';
+  input.onchange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    showToast('📷 Фото будет отправлено при синхронизации');
+  };
+  input.click();
+}
+
+// ─── Sync ─────────────────────────────────────────────────────────────────────
+async function syncEntry(entry) {
+  try {
+    const res = await fetch(`${API_URL}/api/entries`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user?.token}` },
+      body: JSON.stringify(entry),
+    });
+    return res.ok;
+  } catch { return false; }
+}
+
+async function syncObjects() {
+  if (!state.isOnline || !state.user?.token) return;
+  try {
+    await fetch(`${API_URL}/api/objects/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user?.token}` },
+      body: JSON.stringify({ objects: state.objects }),
+    });
+  } catch {}
+}
+
+async function syncAll() {
+  if (!state.isOnline) { showToast('Нет подключения к интернету'); return; }
+  const btn = document.getElementById('syncBtn');
+  btn.classList.add('syncing');
+
+  // Sync pending entries
+  const synced = [];
+  for (const entry of state.pendingEntries) {
+    const ok = await syncEntry(entry);
+    if (ok) { synced.push(entry.id); state.entries.push({...entry, synced: true}); }
+  }
+  state.pendingEntries = state.pendingEntries.filter(e => !synced.includes(e.id));
+
+  // Fetch latest from server
+  try {
+    const res = await fetch(`${API_URL}/api/sync`, {
+      headers: { 'Authorization': `Bearer ${state.user?.token}` }
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.objects) state.objects = data.objects;
+      if (data.entries) {
+        const localIds = new Set(state.entries.map(e => e.id));
+        data.entries.forEach(e => { if (!localIds.has(e.id)) state.entries.push(e); });
+      }
+    }
+  } catch {}
+
+  saveLocal();
+  btn.classList.remove('syncing');
+  updateOfflineBanner();
+  renderScreen(state.currentScreen);
+  showToast(synced.length > 0 ? `✅ Синхронизировано ${synced.length} записей` : '✅ Всё актуально');
+}
+
+// ─── Storage ──────────────────────────────────────────────────────────────────
+function saveLocal() {
+  localStorage.setItem('ops_objects',  JSON.stringify(state.objects));
+  localStorage.setItem('ops_entries',  JSON.stringify(state.entries));
+  localStorage.setItem('ops_pending',  JSON.stringify(state.pendingEntries));
+  localStorage.setItem('ops_user',     JSON.stringify(state.user));
+}
+
+// ─── Modal helpers ────────────────────────────────────────────────────────────
+function showModal(id) { document.getElementById(id).classList.add('show'); }
+function closeModal(id) { document.getElementById(id).classList.remove('show'); }
+
+document.querySelectorAll('.modal-overlay').forEach(m => {
+  m.addEventListener('click', e => { if (e.target === m) m.classList.remove('show'); });
+});
+
+// ─── Toast ────────────────────────────────────────────────────────────────────
+function showToast(msg, duration=2500) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), duration);
+}
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+function init() {
+  // Load demo data if empty
+  if (state.objects.length === 0 && !state.user) {
+    state.user = { name: 'Пользователь', role: 'worker', token: '' };
+    state.objects = [
+      { id: '1', name: 'ЖК Северный', address: 'ул. Полярная, 12', customer: 'СтройГрупп', status: 'active', planCable: 2000, planDevices: 150, ts: Date.now() },
+      { id: '2', name: 'БЦ Орбита', address: 'пр. Космический, 5', customer: 'ОфисПарк', status: 'paused', planCable: 1500, planDevices: 80, ts: Date.now() },
+    ];
+    state.entries = [
+      { id: 'e1', objectId: '1', text: 'Иван и Сергей протянули кабель на 3 этаже', cable: 200, devices: 0, problem: '', ts: Date.now()-3600000, synced: true },
+      { id: 'e2', objectId: '1', text: 'Установили дымовые датчики в коридоре', cable: 0, devices: 12, problem: '', ts: Date.now()-7200000, synced: true },
+    ];
+    saveLocal();
+  }
+
+  updateOfflineBanner();
+  showScreen('home');
+
+  // Register service worker
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }
+}
+
+init();
+</script>
+</body>
+</html>
