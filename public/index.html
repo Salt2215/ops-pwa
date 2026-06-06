@@ -208,6 +208,10 @@ scrollbar-width: none;
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
       Профиль
     </button>
+    <button class="nav-item" onclick="showScreen('team')" id="nav-team" style="display:none">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+      Команда
+    </button>
   </nav>
 </div>
 
@@ -290,18 +294,31 @@ scrollbar-width: none;
 <div class="toast" id="toast"></div>
 
 <script>
-// ─── State ────────────────────────────────────────────────────────────────────
+// ─── Config & State ───
 const API_URL = window.location.origin;
 let state = {
   user: JSON.parse(localStorage.getItem('ops_user') || 'null'),
   objects: JSON.parse(localStorage.getItem('ops_objects') || '[]'),
   entries: JSON.parse(localStorage.getItem('ops_entries') || '[]'),
   pendingEntries: JSON.parse(localStorage.getItem('ops_pending') || '[]'),
+  team: JSON.parse(localStorage.getItem('ops_team') || '[]'),
   currentScreen: 'home',
   isOnline: navigator.onLine,
 };
+const STATUS_LABELS = { active:'В работе', paused:'Приостановлен', problem:'Проблема', done:'Завершён' };
 
-// ─── Offline detection ────────────────────────────────────────────────────────
+function isEngineer() { return state.user?.role === 'engineer' || state.user?.role === 'admin'; }
+function myName() { return state.user?.name || 'Монтажник'; }
+function allEntries() { return [...state.entries, ...state.pendingEntries]; }
+
+// Objects the current user is allowed to see
+function visibleObjects() {
+  if (isEngineer()) return state.objects;
+  const myId = state.user?.teamId;
+  return state.objects.filter(o => Array.isArray(o.assignedTo) && myId && o.assignedTo.includes(myId));
+}
+
+// ─── Offline detection ───
 window.addEventListener('online',  () => { state.isOnline = true;  updateOfflineBanner(); syncAll(); });
 window.addEventListener('offline', () => { state.isOnline = false; updateOfflineBanner(); });
 
@@ -309,25 +326,21 @@ function updateOfflineBanner() {
   const banner = document.getElementById('offlineBanner');
   banner.classList.toggle('show', !state.isOnline);
   document.getElementById('headerSub').textContent = state.isOnline
-    ? (state.pendingEntries.length > 0 ? `${state.pendingEntries.length} записей ожидают синхронизации` : 'Онлайн')
+    ? (isEngineer() ? '👑 Инженер' : 'Монтажник')
     : 'Офлайн — данные сохраняются';
 }
 
-// ─── Navigation ───────────────────────────────────────────────────────────────
+// ─── Navigation ───
 function showScreen(name) {
   state.currentScreen = name;
   document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
   document.getElementById(`nav-${name}`).classList.add('active');
-
   const fab = document.getElementById('fabBtn');
   fab.style.display = ['home','journal'].includes(name) ? 'flex' : 'none';
-
   const titles = { home: 'ОПС Журнал', objects: 'Объекты', journal: 'Журнал работ', profile: 'Профиль' };
   document.getElementById('headerTitle').textContent = titles[name];
-
   renderScreen(name);
 }
-
 function renderScreen(name) {
   const c = document.getElementById('mainContent');
   if (name === 'home')    renderHome(c);
@@ -336,99 +349,62 @@ function renderScreen(name) {
   if (name === 'profile') renderProfile(c);
 }
 
-// ─── Home Screen ──────────────────────────────────────────────────────────────
+// ─── Home ───
 function renderHome(c) {
   const today = new Date().toDateString();
-  const todayEntries = state.entries.filter(e => new Date(e.ts).toDateString() === today);
+  const myEntries = isEngineer() ? allEntries() : allEntries().filter(e => e.userName === myName());
+  const todayEntries = myEntries.filter(e => new Date(e.ts).toDateString() === today);
   const pending = state.pendingEntries.length;
-  const openProblems = state.entries.filter(e => e.problem && e.problem.trim()).length;
-  const activeObjs = state.objects.filter(o => o.status === 'active').length;
-
+  const openProblems = myEntries.filter(e => e.problem && e.problem.trim()).length;
+  const objs = visibleObjects();
+  const activeObjs = objs.filter(o => o.status === 'active').length;
   c.innerHTML = `
     <div style="padding:14px">
       <div class="stats-grid" style="margin-bottom:12px">
-        <div class="stat-card">
-          <div class="stat-val">${activeObjs}</div>
-          <div class="stat-lbl">Активных объектов</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-val">${todayEntries.length}</div>
-          <div class="stat-lbl">Записей сегодня</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-val" style="color:${pending>0?'var(--yellow)':'var(--green)'}">${pending}</div>
-          <div class="stat-lbl">Ожидают синхронизации</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-val" style="color:${openProblems>0?'var(--red)':'var(--green)'}">${openProblems}</div>
-          <div class="stat-lbl">Открытых проблем</div>
-        </div>
+        <div class="stat-card"><div class="stat-val">${activeObjs}</div><div class="stat-lbl">Активных объектов</div></div>
+        <div class="stat-card"><div class="stat-val">${todayEntries.length}</div><div class="stat-lbl">Записей сегодня</div></div>
+        <div class="stat-card"><div class="stat-val" style="color:${pending>0?'var(--yellow)':'var(--green)'}">${pending}</div><div class="stat-lbl">Ожидают синхронизации</div></div>
+        <div class="stat-card"><div class="stat-val" style="color:${openProblems>0?'var(--red)':'var(--green)'}">${openProblems}</div><div class="stat-lbl">Открытых проблем</div></div>
       </div>
     </div>
-
     <div class="quick-grid">
-      <div class="quick-btn" onclick="showAddEntry()">
-        <div class="quick-btn-icon">✍️</div>
-        <div class="quick-btn-label">Внести работы</div>
-        <div class="quick-btn-sub">Запись в журнал</div>
-      </div>
-      <div class="quick-btn" onclick="showScreen('objects')">
-        <div class="quick-btn-icon">🏗</div>
-        <div class="quick-btn-label">Объекты</div>
-        <div class="quick-btn-sub">${state.objects.length} объектов</div>
-      </div>
-      <div class="quick-btn" onclick="takePhoto()">
-        <div class="quick-btn-icon">📷</div>
-        <div class="quick-btn-label">Фото</div>
-        <div class="quick-btn-sub">Прикрепить к объекту</div>
-      </div>
-      <div class="quick-btn" onclick="reportProblem()">
-        <div class="quick-btn-icon">⚠️</div>
-        <div class="quick-btn-label">Проблема</div>
-        <div class="quick-btn-sub">Зафиксировать</div>
-      </div>
+      <div class="quick-btn" onclick="showAddEntry()"><div class="quick-btn-icon">✍️</div><div class="quick-btn-label">Внести работы</div><div class="quick-btn-sub">Запись в журнал</div></div>
+      <div class="quick-btn" onclick="showScreen('objects')"><div class="quick-btn-icon">🏗</div><div class="quick-btn-label">Объекты</div><div class="quick-btn-sub">${objs.length} объектов</div></div>
+      <div class="quick-btn" onclick="takePhoto()"><div class="quick-btn-icon">📷</div><div class="quick-btn-label">Фото</div><div class="quick-btn-sub">Прикрепить</div></div>
+      <div class="quick-btn" onclick="reportProblem()"><div class="quick-btn-icon">⚠️</div><div class="quick-btn-label">Проблема</div><div class="quick-btn-sub">Зафиксировать</div></div>
     </div>
-
     ${todayEntries.length > 0 ? `
     <div class="section-header">Сегодня</div>
-    <div style="padding:0 14px">
-      ${todayEntries.slice(-3).reverse().map(e => entryCardHtml(e)).join('')}
-    </div>` : ''}
+    <div style="padding:0 14px">${todayEntries.sort((a,b)=>b.ts-a.ts).slice(0,3).map(e => entryCardHtml(e)).join('')}</div>` : ''}
   `;
 }
 
-// ─── Objects Screen ───────────────────────────────────────────────────────────
+// ─── Objects ───
 function renderObjects(c) {
-  if (state.objects.length === 0) {
+  const objs = visibleObjects();
+  if (objs.length === 0) {
     c.innerHTML = `
-      <div class="empty">
-        <div class="empty-icon">🏗</div>
-        <div class="empty-text">Объектов пока нет.<br>Добавьте первый объект.</div>
-      </div>
-      <div style="padding:0 14px">
-        <button class="btn btn-primary" onclick="showModal('addObjectModal')">+ Добавить объект</button>
-      </div>`;
+      <div class="empty"><div class="empty-icon">🏗</div><div class="empty-text">${isEngineer()?'Объектов пока нет.<br>Добавьте первый объект.':'Вам пока не назначен ни один объект.<br>Обратитесь к инженеру.'}</div></div>
+      ${isEngineer()?`<div style="padding:0 14px"><button class="btn btn-primary" onclick="showModal('addObjectModal')">+ Добавить объект</button></div>`:''}`;
     return;
   }
-
-  const statusLabels = { active:'В работе', paused:'Приостановлен', problem:'Проблема', done:'Завершён' };
   c.innerHTML = `
-    <div style="padding:14px 14px 0">
-      <button class="btn btn-primary btn-sm" onclick="showModal('addObjectModal')">+ Новый объект</button>
-    </div>
-    ${state.objects.map(o => {
-      const entries = state.entries.filter(e => e.objectId === o.id);
-      const totalCable = entries.reduce((s, e) => s + (parseInt(e.cable)||0), 0);
-      const totalDevices = entries.reduce((s, e) => s + (parseInt(e.devices)||0), 0);
+    ${isEngineer()?`<div style="padding:14px 14px 0"><button class="btn btn-primary btn-sm" onclick="showModal('addObjectModal')">+ Новый объект</button></div>`:''}
+    ${objs.map(o => {
+      const entries = allEntries().filter(e => e.objectId === o.id);
+      const totalCable = entries.reduce((s,e) => s+(parseInt(e.cable)||0), 0);
+      const totalDevices = entries.reduce((s,e) => s+(parseInt(e.devices)||0), 0);
       const pctCable = o.planCable > 0 ? Math.min(totalCable/o.planCable*100, 100) : 0;
+      const assignedCount = Array.isArray(o.assignedTo) ? o.assignedTo.length : 0;
       return `
       <div class="obj-card" onclick="showObjectDetail('${o.id}')">
         <div class="obj-card-header">
           <span class="obj-name">${o.name}</span>
-          <span class="status-pill status-${o.status}">${statusLabels[o.status]||o.status}</span>
+          <span class="status-pill status-${o.status}">${STATUS_LABELS[o.status]||o.status}</span>
         </div>
         <div class="obj-meta">
           ${o.address ? `<span>📍 ${o.address}</span>` : ''}
+          ${isEngineer() ? `<span>👷 ${assignedCount}</span>` : ''}
           <span>🔌 ${totalCable} м</span>
           <span>📡 ${totalDevices} шт</span>
         </div>
@@ -443,38 +419,33 @@ function renderObjects(c) {
   `;
 }
 
-// ─── Journal Screen ───────────────────────────────────────────────────────────
+// ─── Journal ───
 function renderJournal(c) {
-  const all = [...state.entries, ...state.pendingEntries.map(e => ({...e, pending: true}))]
-    .sort((a,b) => b.ts - a.ts);
-
+  let all = [...state.entries, ...state.pendingEntries.map(e => ({...e, pending: true}))];
+  if (!isEngineer()) all = all.filter(e => e.userName === myName());
+  all.sort((a,b) => b.ts - a.ts);
   if (all.length === 0) {
     c.innerHTML = `<div class="empty"><div class="empty-icon">📋</div><div class="empty-text">Журнал пуст.<br>Добавьте первую запись.</div></div>`;
     return;
   }
-
-  // Group by date
   const groups = {};
   all.forEach(e => {
     const d = new Date(e.ts).toLocaleDateString('ru-RU', {day:'numeric',month:'long'});
-    if (!groups[d]) groups[d] = [];
-    groups[d].push(e);
+    (groups[d] = groups[d] || []).push(e);
   });
-
   c.innerHTML = Object.entries(groups).map(([date, entries]) => `
     <div class="section-header">${date}</div>
-    <div style="padding:0 14px">
-      ${entries.map(e => entryCardHtml(e)).join('')}
-    </div>
+    <div style="padding:0 14px">${entries.map(e => entryCardHtml(e)).join('')}</div>
   `).join('') + '<div style="height:80px"></div>';
 }
 
 function entryCardHtml(e) {
   const obj = state.objects.find(o => o.id === e.objectId);
   const time = new Date(e.ts).toLocaleTimeString('ru-RU', {hour:'2-digit',minute:'2-digit'});
+  const who = (isEngineer() && e.userName) ? ` · 👷 ${e.userName}` : '';
   return `
   <div class="entry-card ${e.pending?'entry-pending':''}">
-    <div class="entry-date">${time}${obj ? ' · ' + obj.name : ''}</div>
+    <div class="entry-date">${time}${obj ? ' · ' + obj.name : ''}${who}</div>
     <div class="entry-text">${e.text}</div>
     <div class="entry-footer">
       ${e.cable > 0 ? `<span class="entry-tag">🔌 ${e.cable} м</span>` : ''}
@@ -484,67 +455,128 @@ function entryCardHtml(e) {
   </div>`;
 }
 
-// ─── Profile Screen ───────────────────────────────────────────────────────────
+// ─── Profile (role toggle + team management) ───
 function renderProfile(c) {
-  const totalCable = state.entries.reduce((s,e) => s+(parseInt(e.cable)||0), 0);
-  const totalDevices = state.entries.reduce((s,e) => s+(parseInt(e.devices)||0), 0);
+  const mine = isEngineer() ? state.entries : state.entries.filter(e => e.userName === myName());
+  const totalCable = mine.reduce((s,e) => s+(parseInt(e.cable)||0), 0);
+  const totalDevices = mine.reduce((s,e) => s+(parseInt(e.devices)||0), 0);
   const week = Date.now() - 7*24*3600*1000;
-  const weekEntries = state.entries.filter(e => e.ts > week);
-  const weekCable = weekEntries.reduce((s,e) => s+(parseInt(e.cable)||0), 0);
+  const weekCable = mine.filter(e => e.ts > week).reduce((s,e) => s+(parseInt(e.cable)||0), 0);
 
   c.innerHTML = `
     <div style="padding:14px">
       <div class="card" style="text-align:center;margin:0 0 12px">
-        <div style="font-size:48px;margin-bottom:8px">👷</div>
-        <div style="font-size:18px;font-weight:600">${state.user?.name || 'Монтажник'}</div>
-        <div style="font-size:13px;color:var(--text3);margin-top:4px">${state.user?.role === 'admin' ? '👑 Администратор' : 'Монтажник'}</div>
+        <div style="font-size:48px;margin-bottom:8px">${isEngineer()?'👑':'👷'}</div>
+        <div style="font-size:18px;font-weight:600">${myName()}</div>
+        <div style="font-size:13px;color:var(--text3);margin-top:4px">${isEngineer()?'Инженер':'Монтажник'}</div>
       </div>
 
+      <div class="card" style="margin:0 0 12px;border-color:var(--yellow)">
+        <div class="card-title" style="color:var(--yellow)">⚙️ Тестовый режим</div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:10px">Временно, пока вход через бота отключён. Позже роль придёт из бота.</div>
+        <div style="display:flex;gap:8px;margin-bottom:8px">
+          <button class="btn btn-sm ${isEngineer()?'btn-primary':'btn-secondary'}" style="flex:1" onclick="setTestRole('engineer')">Я инженер</button>
+          <button class="btn btn-sm ${!isEngineer()?'btn-primary':'btn-secondary'}" style="flex:1" onclick="setTestRole('worker')">Я монтажник</button>
+        </div>
+        ${!isEngineer() && state.team.length > 0 ? `
+          <label class="form-label">Войти как:</label>
+          <select class="form-select" onchange="setTestWorker(this.value)">
+            ${state.team.map(t => `<option value="${t.id}" ${state.user?.teamId===t.id?'selected':''}>${t.name}</option>`).join('')}
+          </select>` : ''}
+        ${!isEngineer() && state.team.length === 0 ? `<div style="font-size:12px;color:var(--text3)">Сначала зайдите инженером и добавьте монтажников в команду.</div>` : ''}
+      </div>
+
+      ${isEngineer() ? `
       <div class="card" style="margin:0 0 12px">
-        <div class="card-title">За всё время</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div class="card-title" style="margin:0">👷 Команда (${state.team.length})</div>
+          <button class="btn btn-primary btn-sm" onclick="addTeamMember()">+ Добавить</button>
+        </div>
+        ${state.team.length === 0 ? `<div style="font-size:13px;color:var(--text3)">Монтажников пока нет. Добавьте, чтобы назначать на объекты.</div>` :
+          state.team.map(t => `<div class="entry-card" style="display:flex;justify-content:space-between;align-items:center"><span>👷 ${t.name}</span><button class="btn btn-danger btn-sm" onclick="removeTeamMember('${t.id}')">Удалить</button></div>`).join('')}
+      </div>` : ''}
+
+      <div class="card" style="margin:0 0 12px">
+        <div class="card-title">${isEngineer()?'Сводка (вся бригада)':'Мои показатели'}</div>
         <div class="stats-grid">
           <div class="stat-card"><div class="stat-val">${totalCable}</div><div class="stat-lbl">Метров кабеля</div></div>
           <div class="stat-card"><div class="stat-val">${totalDevices}</div><div class="stat-lbl">Устройств</div></div>
-          <div class="stat-card"><div class="stat-val">${state.entries.length}</div><div class="stat-lbl">Записей</div></div>
+          <div class="stat-card"><div class="stat-val">${mine.length}</div><div class="stat-lbl">Записей</div></div>
           <div class="stat-card"><div class="stat-val">${weekCable}</div><div class="stat-lbl">Метров за неделю</div></div>
         </div>
       </div>
 
       <div class="card" style="margin:0 0 12px">
         <div class="card-title">Синхронизация</div>
-        <div style="font-size:13px;color:var(--text2);margin-bottom:10px">
-          Ожидают синхронизации: <strong style="color:${state.pendingEntries.length>0?'var(--yellow)':'var(--green)'}">${state.pendingEntries.length} записей</strong>
-        </div>
+        <div style="font-size:13px;color:var(--text2);margin-bottom:10px">Ожидают синхронизации: <strong style="color:${state.pendingEntries.length>0?'var(--yellow)':'var(--green)'}">${state.pendingEntries.length} записей</strong></div>
         <button class="btn btn-primary btn-sm" onclick="syncAll()">↻ Синхронизировать сейчас</button>
       </div>
 
       <div class="card" style="margin:0">
         <div class="card-title">Сервер</div>
-        <div style="font-size:13px;color:var(--text2);margin-bottom:10px">
-          Статус: <strong style="color:${state.isOnline?'var(--green)':'var(--red)'}">${state.isOnline?'Онлайн':'Офлайн'}</strong>
-        </div>
-        <button class="btn btn-secondary btn-sm" onclick="if(confirm('Выйти из аккаунта?')){localStorage.clear();location.reload()}">Выйти</button>
+        <div style="font-size:13px;color:var(--text2);margin-bottom:10px">Статус: <strong style="color:${state.isOnline?'var(--green)':'var(--red)'}">${state.isOnline?'Онлайн':'Офлайн'}</strong></div>
+        <button class="btn btn-secondary btn-sm" onclick="if(confirm('Выйти и очистить локальные данные?')){localStorage.clear();location.reload()}">Выйти</button>
       </div>
-    </div>
-  `;
+    </div>`;
 }
 
-// ─── Object Detail ────────────────────────────────────────────────────────────
+function setTestRole(role) {
+  if (!state.user) state.user = { token: '' };
+  state.user.role = role;
+  if (role === 'engineer') {
+    state.user.name = 'Инженер';
+    state.user.teamId = null;
+  } else {
+    if (state.team.length > 0) { state.user.teamId = state.team[0].id; state.user.name = state.team[0].name; }
+    else { state.user.teamId = null; state.user.name = 'Монтажник'; }
+  }
+  saveLocal(); updateOfflineBanner(); renderScreen('profile');
+}
+function setTestWorker(teamId) {
+  const t = state.team.find(x => x.id === teamId);
+  if (t) { state.user.teamId = t.id; state.user.name = t.name; saveLocal(); showToast('Теперь вы: ' + t.name); renderScreen('profile'); }
+}
+
+// ─── Team management ───
+function addTeamMember() {
+  const name = prompt('Имя монтажника:');
+  if (!name || !name.trim()) return;
+  state.team.push({ id: 'm' + Date.now(), name: name.trim(), role: 'worker' });
+  saveLocal(); syncTeam(); renderScreen('profile'); showToast('✅ Монтажник добавлен');
+}
+function removeTeamMember(id) {
+  if (!confirm('Удалить монтажника из команды?')) return;
+  state.team = state.team.filter(t => t.id !== id);
+  state.objects.forEach(o => { if (Array.isArray(o.assignedTo)) o.assignedTo = o.assignedTo.filter(x => x !== id); });
+  saveLocal(); syncTeam(); syncObjects(); renderScreen('profile'); showToast('Удалён');
+}
+
+// ─── Object Detail ───
 function showObjectDetail(id) {
   const obj = state.objects.find(o => o.id === id);
   if (!obj) return;
-  const entries = state.entries.filter(e => e.objectId === id).sort((a,b) => b.ts-a.ts);
+  if (!Array.isArray(obj.assignedTo)) obj.assignedTo = [];
+  const entries = allEntries().filter(e => e.objectId === id).sort((a,b) => b.ts-a.ts);
   const totalCable = entries.reduce((s,e) => s+(parseInt(e.cable)||0), 0);
   const totalDevices = entries.reduce((s,e) => s+(parseInt(e.devices)||0), 0);
   const problems = entries.filter(e => e.problem && e.problem.trim());
-  const statusLabels = { active:'В работе', paused:'Приостановлен', problem:'Проблема', done:'Завершён' };
+
+  const byWorker = {};
+  entries.forEach(e => {
+    const n = e.userName || 'Без имени';
+    if (!byWorker[n]) byWorker[n] = { cable:0, devices:0, count:0 };
+    byWorker[n].cable += parseInt(e.cable)||0;
+    byWorker[n].devices += parseInt(e.devices)||0;
+    byWorker[n].count++;
+  });
 
   document.getElementById('objectDetailContent').innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
       <div class="modal-title" style="margin:0">${obj.name}</div>
-      <span class="status-pill status-${obj.status}">${statusLabels[obj.status]}</span>
+      <span class="status-pill status-${obj.status}">${STATUS_LABELS[obj.status]||obj.status}</span>
     </div>
-    ${obj.address ? `<div style="font-size:13px;color:var(--text2);margin-bottom:12px">📍 ${obj.address}</div>` : ''}
+    ${obj.address ? `<div style="font-size:13px;color:var(--text2);margin-bottom:6px">📍 ${obj.address}</div>` : ''}
+    ${obj.customer ? `<div style="font-size:13px;color:var(--text3);margin-bottom:12px">🏢 ${obj.customer}</div>` : ''}
 
     <div class="stats-grid" style="margin-bottom:14px">
       <div class="stat-card"><div class="stat-val">${totalCable}</div><div class="stat-lbl">Метров кабеля</div></div>
@@ -557,58 +589,77 @@ function showObjectDetail(id) {
       <div class="progress-bar"><div class="progress-fill" style="width:${Math.min(totalCable/obj.planCable*100,100)}%"></div></div>
     </div>` : ''}
 
-    ${problems.length > 0 ? `
-    <div style="margin-bottom:14px">
-      <div class="card-title">Проблемы</div>
-      ${problems.map(e => `<div class="prob-badge prob-open">⚠️ ${e.problem}</div><br>`).join('')}
-    </div>` : ''}
+    ${isEngineer() ? `
+    <div class="card-title">Монтажники на объекте</div>
+    ${state.team.length === 0 ? `<div style="font-size:13px;color:var(--text3);margin-bottom:6px">Добавьте монтажников в «Профиль → Команда».</div>` :
+      state.team.map(t => {
+        const on = obj.assignedTo.includes(t.id);
+        return `<div class="entry-card" style="display:flex;justify-content:space-between;align-items:center">
+          <span>👷 ${t.name}</span>
+          <button class="btn btn-sm ${on?'btn-primary':'btn-secondary'}" onclick="toggleAssign('${obj.id}','${t.id}')">${on?'Назначен ✓':'Назначить'}</button>
+        </div>`;
+      }).join('')}
 
-    <div class="card-title">История (последние 5)</div>
+    ${Object.keys(byWorker).length > 0 ? `
+    <div class="card-title" style="margin-top:14px">Прогресс по монтажникам</div>
+    ${Object.entries(byWorker).map(([n,v]) => `<div class="entry-card"><div style="font-weight:600">👷 ${n}</div><div class="obj-meta" style="margin-top:4px"><span>🔌 ${v.cable} м</span><span>📡 ${v.devices} шт</span><span>📝 ${v.count} зап.</span></div></div>`).join('')}` : ''}
+    ` : ''}
+
+    ${problems.length > 0 ? `
+    <div class="card-title" style="margin-top:14px">Проблемы</div>
+    ${problems.map(e => `<div class="prob-badge prob-open">⚠️ ${e.problem}</div><br>`).join('')}` : ''}
+
+    <div class="card-title" style="margin-top:14px">История (последние 5)</div>
     ${entries.slice(0,5).map(e => entryCardHtml(e)).join('') || '<div style="color:var(--text3);font-size:13px">Записей нет</div>'}
 
     <div style="display:flex;gap:8px;margin-top:14px">
       <button class="btn btn-primary btn-sm" onclick="closeModal('objectDetailModal');showAddEntryForObj('${id}')">+ Внести работы</button>
-      <select class="form-select" style="flex:1" onchange="changeObjStatus('${id}',this.value)">
-        <option value="active" ${obj.status==='active'?'selected':''}>🟢 В работе</option>
-        <option value="paused" ${obj.status==='paused'?'selected':''}>🟡 Пауза</option>
-        <option value="problem" ${obj.status==='problem'?'selected':''}>🔴 Проблема</option>
-        <option value="done" ${obj.status==='done'?'selected':''}>✅ Завершён</option>
-      </select>
+      ${isEngineer() ? `<select class="form-select" style="flex:1" onchange="changeObjStatus('${id}',this.value)">${Object.entries(STATUS_LABELS).map(([k,v])=>`<option value="${k}" ${obj.status===k?'selected':''}>${v}</option>`).join('')}</select>` : ''}
     </div>
   `;
   showModal('objectDetailModal');
 }
 
+function toggleAssign(objId, teamId) {
+  const obj = state.objects.find(o => o.id === objId);
+  if (!obj) return;
+  if (!Array.isArray(obj.assignedTo)) obj.assignedTo = [];
+  if (obj.assignedTo.includes(teamId)) obj.assignedTo = obj.assignedTo.filter(x => x !== teamId);
+  else obj.assignedTo.push(teamId);
+  saveLocal(); syncObjects(); showObjectDetail(objId);
+}
+
 function changeObjStatus(id, status) {
   const obj = state.objects.find(o => o.id === id);
-  if (obj) { obj.status = status; saveLocal(); showToast('Статус обновлён'); }
+  if (obj) { obj.status = status; saveLocal(); syncObjects(); showToast('Статус обновлён'); renderScreen(state.currentScreen); }
 }
 
-// ─── Add Entry ────────────────────────────────────────────────────────────────
+// ─── Add Entry ───
 function showAddEntry() {
+  const objs = visibleObjects();
+  if (objs.length === 0) { showToast(isEngineer()?'Сначала создайте объект':'Вам не назначены объекты'); return; }
   const sel = document.getElementById('entryObject');
-  sel.innerHTML = state.objects.map(o => `<option value="${o.id}">${o.name}</option>`).join('');
-  if (state.objects.length === 0) {
-    showToast('Сначала создайте объект');
-    return;
-  }
+  sel.innerHTML = objs.map(o => `<option value="${o.id}">${o.name}</option>`).join('');
+  document.getElementById('entryText').value = '';
+  document.getElementById('entryCable').value = '';
+  document.getElementById('entryDevices').value = '';
+  document.getElementById('entryProblem').value = '';
   showModal('addEntryModal');
 }
-
 function showAddEntryForObj(objId) {
   showAddEntry();
-  setTimeout(() => { document.getElementById('entryObject').value = objId; }, 100);
+  const sel = document.getElementById('entryObject');
+  if (sel) sel.value = objId;
 }
-
 function saveEntry() {
-  const text = document.getElementById('entryText').value.trim();
-  if (!text) { showToast('Введите описание работ'); return; }
   const objId = document.getElementById('entryObject').value;
+  const text = document.getElementById('entryText').value.trim();
   if (!objId) { showToast('Выберите объект'); return; }
-
+  if (!text) { showToast('Введите описание работ'); return; }
   const entry = {
     id: Date.now().toString(),
     objectId: objId,
+    userName: myName(),
     text,
     cable: parseInt(document.getElementById('entryCable').value) || 0,
     devices: parseInt(document.getElementById('entryDevices').value) || 0,
@@ -616,92 +667,71 @@ function saveEntry() {
     ts: Date.now(),
     synced: false,
   };
+  closeModal('addEntryModal');
+  pushEntry(entry, '✅ Запись сохранена');
+}
 
-  if (state.isOnline) {
-    // Try to sync immediately
+function pushEntry(entry, okMsg) {
+  const canSend = state.isOnline && state.user?.token;
+  if (canSend) {
     syncEntry(entry).then(ok => {
-      if (ok) { state.entries.push({...entry, synced: true}); }
-      else { state.pendingEntries.push(entry); }
-      saveLocal(); updateOfflineBanner();
+      if (ok) state.entries.push({ ...entry, synced: true });
+      else state.pendingEntries.push(entry);
+      saveLocal(); updateOfflineBanner(); renderScreen(state.currentScreen);
     });
   } else {
     state.pendingEntries.push(entry);
-    saveLocal(); updateOfflineBanner();
+    saveLocal(); updateOfflineBanner(); renderScreen(state.currentScreen);
   }
-
-  // Clear form
-  document.getElementById('entryText').value = '';
-  document.getElementById('entryCable').value = '';
-  document.getElementById('entryDevices').value = '';
-  document.getElementById('entryProblem').value = '';
-  closeModal('addEntryModal');
-  showToast(state.isOnline ? '✅ Запись сохранена' : '💾 Сохранено офлайн');
-  renderScreen(state.currentScreen);
+  showToast(canSend ? okMsg : '💾 Сохранено офлайн');
 }
 
-// ─── Save Object ──────────────────────────────────────────────────────────────
+// ─── Quick actions ───
+function reportProblem() {
+  const objs = visibleObjects();
+  if (objs.length === 0) { showToast(isEngineer()?'Сначала создайте объект':'Вам не назначены объекты'); return; }
+  const prob = prompt('Опишите проблему:');
+  if (!prob || !prob.trim()) return;
+  const entry = {
+    id: Date.now().toString(), objectId: objs[0].id, userName: myName(),
+    text: '⚠️ Проблема зафиксирована', cable: 0, devices: 0,
+    problem: prob.trim(), ts: Date.now(), synced: false,
+  };
+  pushEntry(entry, '⚠️ Проблема зафиксирована');
+}
+function takePhoto() {
+  const objs = visibleObjects();
+  if (objs.length === 0) { showToast('Нет доступных объектов'); return; }
+  const input = document.createElement('input');
+  input.type = 'file'; input.accept = 'image/*'; input.capture = 'environment';
+  input.onchange = () => showToast('📷 Загрузка фото появится в следующей версии');
+  input.click();
+}
+
+// ─── Add Object (engineer) ───
 function saveObject() {
   const name = document.getElementById('objName').value.trim();
   if (!name) { showToast('Введите название'); return; }
-
   const obj = {
     id: Date.now().toString(),
     name,
     address: document.getElementById('objAddress').value.trim(),
     customer: document.getElementById('objCustomer').value.trim(),
+    status: 'active',
     planCable: parseInt(document.getElementById('objPlanCable').value) || 0,
     planDevices: parseInt(document.getElementById('objPlanDevices').value) || 0,
-    status: 'active',
+    assignedTo: [],
     ts: Date.now(),
   };
   state.objects.push(obj);
-  saveLocal();
-  syncObjects();
-
-  document.getElementById('objName').value = '';
-  document.getElementById('objAddress').value = '';
-  document.getElementById('objCustomer').value = '';
-  document.getElementById('objPlanCable').value = '';
-  document.getElementById('objPlanDevices').value = '';
+  saveLocal(); syncObjects();
+  ['objName','objAddress','objCustomer','objPlanCable','objPlanDevices'].forEach(idn => { const el = document.getElementById(idn); if (el) el.value = ''; });
   closeModal('addObjectModal');
   showToast('✅ Объект создан');
-  renderScreen(state.currentScreen);
+  showScreen('objects');
 }
 
-// ─── Report Problem ───────────────────────────────────────────────────────────
-function reportProblem() {
-  const prob = prompt('Опишите проблему:');
-  if (!prob || !prob.trim()) return;
-  if (state.objects.length === 0) { showToast('Сначала создайте объект'); return; }
-  const obj = state.objects[0];
-  const entry = {
-    id: Date.now().toString(),
-    objectId: obj.id,
-    text: `⚠️ Проблема зафиксирована`,
-    cable: 0, devices: 0,
-    problem: prob.trim(),
-    ts: Date.now(), synced: false,
-  };
-  state.pendingEntries.push(entry);
-  saveLocal(); updateOfflineBanner();
-  showToast('⚠️ Проблема зафиксирована');
-  renderScreen(state.currentScreen);
-}
-
-// ─── Photo ────────────────────────────────────────────────────────────────────
-function takePhoto() {
-  if (state.objects.length === 0) { showToast('Сначала создайте объект'); return; }
-  const input = document.createElement('input');
-  input.type = 'file'; input.accept = 'image/*'; input.capture = 'environment';
-  input.onchange = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    showToast('📷 Фото будет отправлено при синхронизации');
-  };
-  input.click();
-}
-
-// ─── Sync ─────────────────────────────────────────────────────────────────────
+// ─── Sync ───
 async function syncEntry(entry) {
   try {
     const res = await fetch(`${API_URL}/api/entries`, {
@@ -712,7 +742,6 @@ async function syncEntry(entry) {
     return res.ok;
   } catch { return false; }
 }
-
 async function syncObjects() {
   if (!state.isOnline || !state.user?.token) return;
   try {
@@ -723,91 +752,99 @@ async function syncObjects() {
     });
   } catch {}
 }
-
-async function syncAll() {
-  if (!state.isOnline) { showToast('Нет подключения к интернету'); return; }
+async function syncTeam() {
+  if (!state.isOnline || !state.user?.token || !isEngineer()) return;
+  try {
+    await fetch(`${API_URL}/api/team/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user?.token}` },
+      body: JSON.stringify({ team: state.team }),
+    });
+  } catch {}
+}
+async function syncAll(silent = false) {
+  if (!state.isOnline) { if (!silent) showToast('Нет подключения к интернету'); return; }
+  if (!state.user?.token) { if (!silent) showToast('Войдите через Telegram-бота, чтобы синхронизировать'); return; }
   const btn = document.getElementById('syncBtn');
-  btn.classList.add('syncing');
+  if (btn) btn.classList.add('syncing');
 
-  // Sync pending entries
+  await syncObjects();
+  await syncTeam();
+
   const synced = [];
   for (const entry of state.pendingEntries) {
     const ok = await syncEntry(entry);
-    if (ok) { synced.push(entry.id); state.entries.push({...entry, synced: true}); }
+    if (ok) { synced.push(entry.id); state.entries.push({ ...entry, synced: true }); }
   }
   state.pendingEntries = state.pendingEntries.filter(e => !synced.includes(e.id));
 
-  // Fetch latest from server
   try {
-    const res = await fetch(`${API_URL}/api/sync`, {
-      headers: { 'Authorization': `Bearer ${state.user?.token}` }
-    });
+    const res = await fetch(`${API_URL}/api/sync`, { headers: { 'Authorization': `Bearer ${state.user?.token}` } });
     if (res.ok) {
       const data = await res.json();
-      if (data.objects) state.objects = data.objects;
-      if (data.entries) {
-        const localIds = new Set(state.entries.map(e => e.id));
-        data.entries.forEach(e => { if (!localIds.has(e.id)) state.entries.push(e); });
+      if (Array.isArray(data.objects)) state.objects = data.objects;
+      if (Array.isArray(data.team)) state.team = data.team;
+      if (Array.isArray(data.entries)) {
+        const ids = new Set(state.entries.map(e => e.id));
+        data.entries.forEach(e => { if (!ids.has(e.id)) state.entries.push(e); });
       }
     }
   } catch {}
 
   saveLocal();
-  btn.classList.remove('syncing');
+  if (btn) btn.classList.remove('syncing');
   updateOfflineBanner();
   renderScreen(state.currentScreen);
-  showToast(synced.length > 0 ? `✅ Синхронизировано ${synced.length} записей` : '✅ Всё актуально');
+  if (!silent || synced.length > 0) showToast(synced.length > 0 ? `✅ Синхронизировано ${synced.length} записей` : '✅ Всё актуально');
 }
 
-// ─── Storage ──────────────────────────────────────────────────────────────────
+// ─── Storage ───
 function saveLocal() {
-  localStorage.setItem('ops_objects',  JSON.stringify(state.objects));
-  localStorage.setItem('ops_entries',  JSON.stringify(state.entries));
-  localStorage.setItem('ops_pending',  JSON.stringify(state.pendingEntries));
-  localStorage.setItem('ops_user',     JSON.stringify(state.user));
+  localStorage.setItem('ops_objects', JSON.stringify(state.objects));
+  localStorage.setItem('ops_entries', JSON.stringify(state.entries));
+  localStorage.setItem('ops_pending', JSON.stringify(state.pendingEntries));
+  localStorage.setItem('ops_team',    JSON.stringify(state.team));
+  localStorage.setItem('ops_user',    JSON.stringify(state.user));
 }
 
-// ─── Modal helpers ────────────────────────────────────────────────────────────
+// ─── Modals & toast ───
 function showModal(id) { document.getElementById(id).classList.add('show'); }
 function closeModal(id) { document.getElementById(id).classList.remove('show'); }
-
-document.querySelectorAll('.modal-overlay').forEach(m => {
-  m.addEventListener('click', e => { if (e.target === m) m.classList.remove('show'); });
-});
-
-// ─── Toast ────────────────────────────────────────────────────────────────────
-function showToast(msg, duration=2500) {
+document.querySelectorAll('.modal-overlay').forEach(m => m.addEventListener('click', e => { if (e.target === m) m.classList.remove('show'); }));
+function showToast(msg, duration = 2500) {
   const t = document.getElementById('toast');
   t.textContent = msg; t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), duration);
 }
 
-// ─── Init ─────────────────────────────────────────────────────────────────────
+// ─── Init ───
 function init() {
-  // Load demo data if empty
-  if (state.objects.length === 0 && !state.user) {
-    state.user = { name: 'Пользователь', role: 'worker', token: '' };
+  if (!state.user) {
+    state.user = { name: 'Инженер', role: 'engineer', token: '', teamId: null };
+  }
+  if (state.objects.length === 0 && state.team.length === 0) {
+    state.team = [
+      { id: 'm1', name: 'Иван Петров', role: 'worker' },
+      { id: 'm2', name: 'Сергей Котов', role: 'worker' },
+    ];
     state.objects = [
-      { id: '1', name: 'ЖК Северный', address: 'ул. Полярная, 12', customer: 'СтройГрупп', status: 'active', planCable: 2000, planDevices: 150, ts: Date.now() },
-      { id: '2', name: 'БЦ Орбита', address: 'пр. Космический, 5', customer: 'ОфисПарк', status: 'paused', planCable: 1500, planDevices: 80, ts: Date.now() },
+      { id: '1', name: 'Детский сад «Леруа»', address: 'ул. Полярная, 12', customer: 'СтройГрупп', status: 'active', planCable: 2800, planDevices: 190, assignedTo: ['m1','m2'], ts: Date.now() },
+      { id: '2', name: 'БЦ Орбита', address: 'пр. Мира, 40', customer: 'ИнвестСтрой', status: 'active', planCable: 1500, planDevices: 80, assignedTo: ['m1'], ts: Date.now() },
     ];
     state.entries = [
-      { id: 'e1', objectId: '1', text: 'Иван и Сергей протянули кабель на 3 этаже', cable: 200, devices: 0, problem: '', ts: Date.now()-3600000, synced: true },
-      { id: 'e2', objectId: '1', text: 'Установили дымовые датчики в коридоре', cable: 0, devices: 12, problem: '', ts: Date.now()-7200000, synced: true },
+      { id: 'e1', objectId: '1', userName: 'Иван Петров', text: 'Протянули магистраль на 3 этаже', cable: 200, devices: 0, problem: '', ts: Date.now()-3600000, synced: true },
+      { id: 'e2', objectId: '1', userName: 'Сергей Котов', text: 'Установили дымовые извещатели в коридоре', cable: 0, devices: 12, problem: '', ts: Date.now()-7200000, synced: true },
+      { id: 'e3', objectId: '2', userName: 'Иван Петров', text: 'Стояк слаботочки', cable: 120, devices: 0, problem: 'Нет стройготовности на 2 этаже', ts: Date.now()-9000000, synced: true },
     ];
     saveLocal();
   }
-
   updateOfflineBanner();
   showScreen('home');
-
-  // Register service worker
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
-  }
+  if ('serviceWorker' in navigator) { navigator.serviceWorker.register('/sw.js').catch(() => {}); }
+  if (state.isOnline && state.user?.token) { syncAll(true); }
 }
-
 init();
+
 </script>
 </body>
 </html>
