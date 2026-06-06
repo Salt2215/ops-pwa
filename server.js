@@ -15,12 +15,13 @@ async function auth(req, res, next) {
   const token = req.headers.authorization?.replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'No token' });
   try {
-    const { rows } = await pool.query('SELECT * FROM users WHERE token=$1', [token]);
+    const { rows } = await pool.query('SELECT * FROM pwa_users WHERE token=$1', [token]);
     if (!rows[0]) return res.status(401).json({ error: 'Invalid token' });
     req.user = rows[0];
     next();
   } catch (e) {
-    next();
+    console.error('auth error:', e.message);
+    res.status(500).json({ error: 'auth check failed' });
   }
 }
 
@@ -57,6 +58,14 @@ async function initDB() {
       ts BIGINT,
       created_at TIMESTAMP DEFAULT NOW()
     );
+    CREATE TABLE IF NOT EXISTS pwa_team (
+      id TEXT PRIMARY KEY,
+      name TEXT,
+      role TEXT DEFAULT 'worker',
+      owner_uid BIGINT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+    ALTER TABLE pwa_objects ADD COLUMN IF NOT EXISTS assigned_to TEXT DEFAULT '';
   `);
   console.log('DB initialized');
 }
@@ -66,31 +75,29 @@ async function initDB() {
 // Sync — get all data for user
 app.get('/api/sync', auth, async (req, res) => {
   try {
-    const uid = req.user?.uid;
-    let objects, entries;
-
-    if (req.user?.role === 'admin') {
-      objects = (await pool.query('SELECT * FROM pwa_objects ORDER BY created_at DESC')).rows;
-    } else {
-      objects = (await pool.query('SELECT * FROM pwa_objects WHERE owner_uid=$1 ORDER BY created_at DESC', [uid])).rows;
-    }
-
+    const safeArr = s => { try { return s ? JSON.parse(s) : []; } catch { return []; } };
+    const objects = (await pool.query('SELECT * FROM pwa_objects ORDER BY created_at DESC')).rows;
+    const team = (await pool.query('SELECT * FROM pwa_team ORDER BY created_at DESC')).rows;
     const objIds = objects.map(o => o.id);
-    entries = objIds.length > 0
-      ? (await pool.query('SELECT * FROM pwa_entries WHERE object_id = ANY($1) ORDER BY ts DESC LIMIT 200', [objIds])).rows
+    const entries = objIds.length > 0
+      ? (await pool.query(
+          `SELECT e.*, u.name AS author FROM pwa_entries e
+           LEFT JOIN pwa_users u ON u.uid = e.uid
+           WHERE e.object_id = ANY($1) ORDER BY e.ts DESC LIMIT 500`, [objIds])).rows
       : [];
 
-    // Normalize keys
     const normObj = objects.map(o => ({
       id: o.id, name: o.name, address: o.address, customer: o.customer,
-      status: o.status, planCable: o.plan_cable, planDevices: o.plan_devices, ts: o.created_at
+      status: o.status, planCable: o.plan_cable, planDevices: o.plan_devices,
+      assignedTo: safeArr(o.assigned_to), ts: o.created_at
     }));
+    const normTeam = team.map(t => ({ id: t.id, name: t.name, role: t.role }));
     const normEnt = entries.map(e => ({
-      id: e.id, objectId: e.object_id, text: e.text,
+      id: e.id, objectId: e.object_id, text: e.text, userName: e.author || '',
       cable: e.cable, devices: e.devices, problem: e.problem, ts: e.ts, synced: true
     }));
 
-    res.json({ objects: normObj, entries: normEnt });
+    res.json({ objects: normObj, team: normTeam, entries: normEnt });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: e.message });
@@ -118,10 +125,29 @@ app.post('/api/objects/sync', auth, async (req, res) => {
     const { objects } = req.body;
     for (const o of objects) {
       await pool.query(
-        `INSERT INTO pwa_objects (id,name,address,customer,status,plan_cable,plan_devices,owner_uid)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-         ON CONFLICT (id) DO UPDATE SET name=$2,address=$3,customer=$4,status=$5,plan_cable=$6,plan_devices=$7`,
-        [o.id, o.name, o.address||'', o.customer||'', o.status||'active', o.planCable||0, o.planDevices||0, req.user?.uid]
+        `INSERT INTO pwa_objects (id,name,address,customer,status,plan_cable,plan_devices,assigned_to,owner_uid)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         ON CONFLICT (id) DO UPDATE SET name=$2,address=$3,customer=$4,status=$5,plan_cable=$6,plan_devices=$7,assigned_to=$8`,
+        [o.id, o.name, o.address||'', o.customer||'', o.status||'active', o.planCable||0, o.planDevices||0, JSON.stringify(o.assignedTo||[]), req.user?.uid]
+      );
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Sync team roster (engineer only) — full replace so removals propagate
+app.post('/api/team/sync', auth, async (req, res) => {
+  try {
+    if (!['admin','engineer'].includes(req.user?.role)) return res.json({ ok: true });
+    const team = req.body.team || [];
+    await pool.query('DELETE FROM pwa_team');
+    for (const t of team) {
+      await pool.query(
+        'INSERT INTO pwa_team (id,name,role,owner_uid) VALUES ($1,$2,$3,$4) ON CONFLICT (id) DO UPDATE SET name=$2,role=$3',
+        [t.id, t.name, t.role||'worker', req.user?.uid]
       );
     }
     res.json({ ok: true });
