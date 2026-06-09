@@ -167,9 +167,34 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 .pending-badge { background: var(--yellow); color: #000; font-size: 10px; font-weight: 700; width: 16px; height: 16px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; margin-left: 4px; }
 
 scrollbar-width: none;
+
+/* Login screen */
+.login-screen { position: fixed; inset: 0; z-index: 200; background: var(--bg); display: none; align-items: center; justify-content: center; padding: 24px; }
+.login-screen.show { display: flex; }
+.login-box { width: 100%; max-width: 340px; text-align: center; }
+.login-logo { font-size: 56px; margin-bottom: 14px; }
+.login-title { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+.login-sub { font-size: 13px; color: var(--text3); margin-bottom: 22px; }
+.login-box .form-input { text-align: center; font-size: 18px; letter-spacing: .04em; }
+.login-hint { font-size: 12px; color: var(--text3); margin-top: 16px; line-height: 1.5; }
+.member-code { font-size: 12px; color: var(--text2); margin-top: 3px; }
+.member-code b { font-family: var(--mono); color: var(--accent2); font-weight: 500; }
 </style>
 </head>
 <body>
+
+<!-- Login screen -->
+<div class="login-screen" id="loginScreen">
+  <div class="login-box">
+    <div class="login-logo">🔥</div>
+    <div class="login-title">ОПС Журнал</div>
+    <div class="login-sub">Введите ваш код доступа</div>
+    <input class="form-input" id="loginCode" type="text" placeholder="Код" autocomplete="off"
+           onkeydown="if(event.key==='Enter')doLogin()">
+    <button class="btn btn-primary" onclick="doLogin()" style="margin-top:12px">Войти</button>
+    <div class="login-hint">Личный код выдаёт инженер.<br>Инженер входит своим кодом.</div>
+  </div>
+</div>
 
 <div class="app">
   <div class="header">
@@ -471,21 +496,6 @@ function renderProfile(c) {
         <div style="font-size:13px;color:var(--text3);margin-top:4px">${isEngineer()?'Инженер':'Монтажник'}</div>
       </div>
 
-      <div class="card" style="margin:0 0 12px;border-color:var(--yellow)">
-        <div class="card-title" style="color:var(--yellow)">⚙️ Тестовый режим</div>
-        <div style="font-size:12px;color:var(--text3);margin-bottom:10px">Временно, пока вход через бота отключён. Позже роль придёт из бота.</div>
-        <div style="display:flex;gap:8px;margin-bottom:8px">
-          <button class="btn btn-sm ${isEngineer()?'btn-primary':'btn-secondary'}" style="flex:1" onclick="setTestRole('engineer')">Я инженер</button>
-          <button class="btn btn-sm ${!isEngineer()?'btn-primary':'btn-secondary'}" style="flex:1" onclick="setTestRole('worker')">Я монтажник</button>
-        </div>
-        ${!isEngineer() && state.team.length > 0 ? `
-          <label class="form-label">Войти как:</label>
-          <select class="form-select" onchange="setTestWorker(this.value)">
-            ${state.team.map(t => `<option value="${t.id}" ${state.user?.teamId===t.id?'selected':''}>${t.name}</option>`).join('')}
-          </select>` : ''}
-        ${!isEngineer() && state.team.length === 0 ? `<div style="font-size:12px;color:var(--text3)">Сначала зайдите инженером и добавьте монтажников в команду.</div>` : ''}
-      </div>
-
       ${isEngineer() ? `
       <div class="card" style="margin:0 0 12px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
@@ -493,7 +503,16 @@ function renderProfile(c) {
           <button class="btn btn-primary btn-sm" onclick="addTeamMember()">+ Добавить</button>
         </div>
         ${state.team.length === 0 ? `<div style="font-size:13px;color:var(--text3)">Монтажников пока нет. Добавьте, чтобы назначать на объекты.</div>` :
-          state.team.map(t => `<div class="entry-card" style="display:flex;justify-content:space-between;align-items:center"><span>👷 ${t.name}</span><button class="btn btn-danger btn-sm" onclick="removeTeamMember('${t.id}')">Удалить</button></div>`).join('')}
+          state.team.map(t => `<div class="entry-card" style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+            <div>
+              <div>👷 ${t.name}</div>
+              <div class="member-code">Код входа: <b>${t.code || '—'}</b></div>
+            </div>
+            <div style="display:flex;gap:6px;flex-shrink:0">
+              ${t.code ? `<button class="btn btn-secondary btn-sm" onclick="copyCode('${t.code}')">Копир.</button>` : `<button class="btn btn-secondary btn-sm" onclick="genCode('${t.id}')">Код</button>`}
+              <button class="btn btn-danger btn-sm" onclick="removeTeamMember('${t.id}')">×</button>
+            </div>
+          </div>`).join('')}
       </div>` : ''}
 
       <div class="card" style="margin:0 0 12px">
@@ -515,34 +534,70 @@ function renderProfile(c) {
       <div class="card" style="margin:0">
         <div class="card-title">Сервер</div>
         <div style="font-size:13px;color:var(--text2);margin-bottom:10px">Статус: <strong style="color:${state.isOnline?'var(--green)':'var(--red)'}">${state.isOnline?'Онлайн':'Офлайн'}</strong></div>
-        <button class="btn btn-secondary btn-sm" onclick="if(confirm('Выйти и очистить локальные данные?')){localStorage.clear();location.reload()}">Выйти</button>
+        <button class="btn btn-secondary btn-sm" onclick="logout()">Выйти</button>
       </div>
     </div>`;
 }
 
-function setTestRole(role) {
-  if (!state.user) state.user = { token: '' };
-  state.user.role = role;
-  if (role === 'engineer') {
-    state.user.name = 'Инженер';
-    state.user.teamId = null;
-  } else {
-    if (state.team.length > 0) { state.user.teamId = state.team[0].id; state.user.name = state.team[0].name; }
-    else { state.user.teamId = null; state.user.name = 'Монтажник'; }
-  }
-  saveLocal(); updateOfflineBanner(); renderScreen('profile');
+// ─── Login / logout ───
+async function doLogin() {
+  const input = document.getElementById('loginCode');
+  const code = (input.value || '').trim();
+  if (!code) { showToast('Введите код'); return; }
+  if (!navigator.onLine) { showToast('Для входа нужен интернет'); return; }
+  try {
+    const res = await fetch(`${API_URL}/api/login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    if (!res.ok) { showToast(res.status === 403 ? 'Неверный код' : 'Ошибка входа'); return; }
+    const data = await res.json();
+    state.user = { token: data.token, name: data.name, role: data.role, teamId: data.teamId || null };
+    // чистим локальные данные — дальше всё придёт с сервера по роли
+    state.objects = []; state.entries = []; state.pendingEntries = []; state.team = [];
+    input.value = '';
+    saveLocal();
+    startApp();
+  } catch { showToast('Нет связи с сервером'); }
 }
-function setTestWorker(teamId) {
-  const t = state.team.find(x => x.id === teamId);
-  if (t) { state.user.teamId = t.id; state.user.name = t.name; saveLocal(); showToast('Теперь вы: ' + t.name); renderScreen('profile'); }
+
+async function logout() {
+  if (!confirm('Выйти из приложения?')) return;
+  try {
+    if (state.user?.token) {
+      await fetch(`${API_URL}/api/logout`, { method: 'POST', headers: { 'Authorization': `Bearer ${state.user.token}` } });
+    }
+  } catch {}
+  localStorage.clear();
+  location.reload();
+}
+
+// ─── Коды доступа монтажников ───
+function genUniqueCode() {
+  const used = new Set(state.team.map(t => t.code).filter(Boolean));
+  let c;
+  do { c = String(Math.floor(100000 + Math.random() * 900000)); } while (used.has(c));
+  return c;
+}
+function genCode(id) {
+  const t = state.team.find(x => x.id === id);
+  if (!t) return;
+  t.code = genUniqueCode();
+  saveLocal(); syncTeam(); renderScreen('profile');
+  showToast('Код: ' + t.code);
+}
+function copyCode(code) {
+  if (navigator.clipboard) navigator.clipboard.writeText(code).then(() => showToast('Скопировано: ' + code)).catch(() => showToast('Код: ' + code));
+  else showToast('Код: ' + code);
 }
 
 // ─── Team management ───
 function addTeamMember() {
   const name = prompt('Имя монтажника:');
   if (!name || !name.trim()) return;
-  state.team.push({ id: 'm' + Date.now(), name: name.trim(), role: 'worker' });
-  saveLocal(); syncTeam(); renderScreen('profile'); showToast('✅ Монтажник добавлен');
+  const code = genUniqueCode();
+  state.team.push({ id: 'm' + Date.now(), name: name.trim(), role: 'worker', code });
+  saveLocal(); syncTeam(); renderScreen('profile'); showToast('✅ Добавлен. Код входа: ' + code);
 }
 function removeTeamMember(id) {
   if (!confirm('Удалить монтажника из команды?')) return;
@@ -743,7 +798,7 @@ async function syncEntry(entry) {
   } catch { return false; }
 }
 async function syncObjects() {
-  if (!state.isOnline || !state.user?.token) return;
+  if (!state.isOnline || !state.user?.token || !isEngineer()) return;
   try {
     await fetch(`${API_URL}/api/objects/sync`, {
       method: 'POST',
@@ -819,28 +874,20 @@ function showToast(msg, duration = 2500) {
 
 // ─── Init ───
 function init() {
-  if (!state.user) {
-    state.user = { name: 'Инженер', role: 'engineer', token: '', teamId: null };
+  if ('serviceWorker' in navigator) { navigator.serviceWorker.register('/sw.js').catch(() => {}); }
+  if (!state.user || !state.user.token) {
+    showLogin();
+  } else {
+    startApp();
   }
-  if (state.objects.length === 0 && state.team.length === 0) {
-    state.team = [
-      { id: 'm1', name: 'Иван Петров', role: 'worker' },
-      { id: 'm2', name: 'Сергей Котов', role: 'worker' },
-    ];
-    state.objects = [
-      { id: '1', name: 'Детский сад «Леруа»', address: 'ул. Полярная, 12', customer: 'СтройГрупп', status: 'active', planCable: 2800, planDevices: 190, assignedTo: ['m1','m2'], ts: Date.now() },
-      { id: '2', name: 'БЦ Орбита', address: 'пр. Мира, 40', customer: 'ИнвестСтрой', status: 'active', planCable: 1500, planDevices: 80, assignedTo: ['m1'], ts: Date.now() },
-    ];
-    state.entries = [
-      { id: 'e1', objectId: '1', userName: 'Иван Петров', text: 'Протянули магистраль на 3 этаже', cable: 200, devices: 0, problem: '', ts: Date.now()-3600000, synced: true },
-      { id: 'e2', objectId: '1', userName: 'Сергей Котов', text: 'Установили дымовые извещатели в коридоре', cable: 0, devices: 12, problem: '', ts: Date.now()-7200000, synced: true },
-      { id: 'e3', objectId: '2', userName: 'Иван Петров', text: 'Стояк слаботочки', cable: 120, devices: 0, problem: 'Нет стройготовности на 2 этаже', ts: Date.now()-9000000, synced: true },
-    ];
-    saveLocal();
-  }
+}
+function showLogin() {
+  document.getElementById('loginScreen').classList.add('show');
+}
+function startApp() {
+  document.getElementById('loginScreen').classList.remove('show');
   updateOfflineBanner();
   showScreen('home');
-  if ('serviceWorker' in navigator) { navigator.serviceWorker.register('/sw.js').catch(() => {}); }
   if (state.isOnline && state.user?.token) { syncAll(true); }
 }
 init();
