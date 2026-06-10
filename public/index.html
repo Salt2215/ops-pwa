@@ -49,7 +49,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 
 .content { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 .nav { display: grid; grid-template-columns: repeat(6, 1fr); background: var(--bg2); border-top: 1px solid var(--border); flex-shrink: 0; padding-bottom: env(safe-area-inset-bottom); }
-.nav-item { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 10px 4px; cursor: pointer; border: none; background: transparent; color: var(--text3); font-family: var(--font); font-size: 10px; transition: color .2s; }
+.nav-item { position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 10px 4px; cursor: pointer; border: none; background: transparent; color: var(--text3); font-family: var(--font); font-size: 10px; transition: color .2s; }
 .nav-item.active { color: var(--accent); }
 .nav-item svg { width: 22px; height: 22px; }
 
@@ -188,6 +188,12 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 .chat-input-bar input { flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 20px; padding: 10px 14px; color: var(--text); font-family: var(--font); font-size: 14px; outline: none; }
 .chat-input-bar input:focus { border-color: var(--accent); }
 .chat-send { background: var(--accent); color: #fff; border: none; border-radius: 50%; width: 40px; height: 40px; font-size: 15px; cursor: pointer; flex-shrink: 0; }
+
+/* Chat extras */
+.nav-badge { position: absolute; top: 4px; left: calc(50% + 4px); min-width: 16px; height: 16px; padding: 0 4px; background: var(--red); color: #fff; font-size: 10px; font-weight: 700; border-radius: 8px; display: flex; align-items: center; justify-content: center; line-height: 1; }
+.chat-date { align-self: center; font-size: 11px; color: var(--text3); background: var(--bg3); padding: 3px 12px; border-radius: 12px; margin: 8px 0 2px; }
+.chat-jump { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(112px + env(safe-area-inset-bottom)); background: var(--accent); color: #fff; border: none; border-radius: 20px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; z-index: 9; box-shadow: 0 4px 16px rgba(79,127,255,.4); }
+.chat-retry { cursor: pointer; text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -243,6 +249,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
       Журнал
     </button>
     <button class="nav-item" onclick="showScreen('chat')" id="nav-chat">
+      <span class="nav-badge" id="chatBadge" style="display:none"></span>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>
       Чат
     </button>
@@ -395,6 +402,7 @@ let state = {
   team: JSON.parse(localStorage.getItem('ops_team') || '[]'),
   projects: JSON.parse(localStorage.getItem('ops_projects') || '[]'),
   messages: JSON.parse(localStorage.getItem('ops_messages') || '[]'),
+  pendingMsgs: [],
   currentScreen: 'home',
   isOnline: navigator.onLine,
 };
@@ -434,7 +442,15 @@ function showScreen(name) {
   document.getElementById('headerTitle').textContent = titles[name];
   renderScreen(name);
   if (chatPollTimer) { clearInterval(chatPollTimer); chatPollTimer = null; }
-  if (name === 'chat') { pollMessages(); chatPollTimer = setInterval(pollMessages, 4000); }
+  if (name === 'chat') {
+    if (bgPollTimer) { clearInterval(bgPollTimer); bgPollTimer = null; }
+    markChatSeen();
+    pollMessages();
+    chatPollTimer = setInterval(pollMessages, 4000);
+  } else if (!bgPollTimer && state.user?.token) {
+    bgPollTimer = setInterval(pollMessages, 10000);
+  }
+  updateChatBadge();
 }
 function renderScreen(name) {
   const c = document.getElementById('mainContent');
@@ -626,7 +642,7 @@ async function doLogin() {
     const data = await res.json();
     state.user = { token: data.token, name: data.name, role: data.role, teamId: data.teamId || null };
     // чистим локальные данные — дальше всё придёт с сервера по роли
-    state.objects = []; state.entries = []; state.pendingEntries = []; state.team = []; state.projects = []; state.messages = [];
+    state.objects = []; state.entries = []; state.pendingEntries = []; state.team = []; state.projects = []; state.messages = []; state.pendingMsgs = []; localStorage.removeItem('ops_chat_seen');
     input.value = '';
     saveLocal();
     startApp();
@@ -871,15 +887,54 @@ async function syncEntry(entry) {
 }
 // ─── Chat ───
 let chatPollTimer = null;
+let bgPollTimer = null;
 let chatLastRenderedId = null;
 
 function escapeText(t) {
   return (t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
+function linkify(escaped) {
+  return escaped.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">$1</a>');
+}
+function dateLabel(ts) {
+  const d = new Date(Number(ts));
+  const today = new Date(); const y = new Date(); y.setDate(today.getDate() - 1);
+  const same = (a, b) => a.toDateString() === b.toDateString();
+  if (same(d, today)) return 'Сегодня';
+  if (same(d, y)) return 'Вчера';
+  return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+
+function getChatMessages() {
+  const serverIds = new Set((state.messages || []).map(m => m.id));
+  const pend = (state.pendingMsgs || []).filter(m => !serverIds.has(m.id));
+  return [...(state.messages || []), ...pend].sort((a, b) => Number(a.ts) - Number(b.ts));
+}
+function unreadCount() {
+  const msgs = state.messages || [];
+  const seen = localStorage.getItem('ops_chat_seen') || '';
+  let after;
+  if (!seen) after = msgs;
+  else { const idx = msgs.findIndex(m => m.id === seen); after = idx >= 0 ? msgs.slice(idx + 1) : msgs; }
+  return after.filter(m => m.userName !== myName()).length;
+}
+function updateChatBadge() {
+  const el = document.getElementById('chatBadge');
+  if (!el) return;
+  const n = unreadCount();
+  if (n > 0) { el.textContent = n > 99 ? '99+' : String(n); el.style.display = 'flex'; }
+  else el.style.display = 'none';
+}
+function markChatSeen() {
+  const msgs = state.messages || [];
+  if (msgs.length) localStorage.setItem('ops_chat_seen', msgs[msgs.length - 1].id);
+  updateChatBadge();
+}
 
 function renderChat(c) {
   c.innerHTML = `
     <div class="chat-list" id="chatMessages"></div>
+    <button class="chat-jump" id="chatJump" onclick="scrollChatBottom()" style="display:none">↓ новые сообщения</button>
     <div class="chat-input-bar">
       <input id="chatInput" placeholder="Сообщение..." autocomplete="off" onkeydown="if(event.key==='Enter')sendMessage()">
       <button class="chat-send" onclick="sendMessage()">➤</button>
@@ -888,27 +943,53 @@ function renderChat(c) {
   renderChatMessages(true);
 }
 
+function scrollChatBottom() {
+  const content = document.getElementById('mainContent');
+  if (content) content.scrollTop = content.scrollHeight;
+  const jump = document.getElementById('chatJump');
+  if (jump) jump.style.display = 'none';
+}
+
 function renderChatMessages(forceScroll) {
   const box = document.getElementById('chatMessages');
   if (!box) return;
-  const msgs = state.messages || [];
+  const content = document.getElementById('mainContent');
+  const nearBottom = content ? (content.scrollHeight - content.scrollTop - content.clientHeight < 90) : true;
+  const msgs = getChatMessages();
   if (msgs.length === 0) {
     box.innerHTML = `<div class="empty" style="margin-top:30px"><div class="empty-icon">💬</div><div class="empty-text">Сообщений пока нет.<br>Напишите первым!</div></div>`;
     chatLastRenderedId = null;
     return;
   }
-  box.innerHTML = msgs.map(m => {
+  let html = ''; let lastDay = '';
+  msgs.forEach(m => {
+    const day = dateLabel(m.ts);
+    if (day !== lastDay) { html += `<div class="chat-date">${day}</div>`; lastDay = day; }
     const mine = m.userName === myName();
     const crown = (m.role === 'engineer' || m.role === 'admin') ? '👑 ' : '';
     const time = new Date(Number(m.ts)).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-    return `<div class="chat-msg ${mine ? 'chat-mine' : 'chat-other'}">
-      <div class="chat-meta">${crown}${escapeText(m.userName || 'Без имени')} · ${time}</div>
-      ${escapeText(m.text)}
+    let status = '';
+    if (mine) {
+      if (m.status === 'sending') status = ' ⏳';
+      else if (m.status === 'failed') status = ` <span class="chat-retry" onclick="retrySend('${m.id}')">❗ повторить</span>`;
+      else status = ' ✓';
+    }
+    html += `<div class="chat-msg ${mine ? 'chat-mine' : 'chat-other'}">
+      <div class="chat-meta">${crown}${escapeText(m.userName || 'Без имени')} · ${time}${status}</div>
+      ${linkify(escapeText(m.text))}
     </div>`;
-  }).join('');
-  chatLastRenderedId = msgs[msgs.length - 1].id;
-  const content = document.getElementById('mainContent');
-  if (forceScroll && content) content.scrollTop = content.scrollHeight;
+  });
+  box.innerHTML = html;
+  const newLast = msgs[msgs.length - 1].id;
+  const hadNew = newLast !== chatLastRenderedId;
+  chatLastRenderedId = newLast;
+  const jump = document.getElementById('chatJump');
+  if (forceScroll || nearBottom) {
+    if (content) content.scrollTop = content.scrollHeight;
+    if (jump) jump.style.display = 'none';
+  } else if (hadNew && jump) {
+    jump.style.display = 'block';
+  }
 }
 
 async function pollMessages() {
@@ -919,11 +1000,11 @@ async function pollMessages() {
     const data = await res.json();
     if (!Array.isArray(data.messages)) return;
     state.messages = data.messages;
+    const sids = new Set(data.messages.map(m => m.id));
+    state.pendingMsgs = (state.pendingMsgs || []).filter(m => !sids.has(m.id));
     saveLocal();
-    if (state.currentScreen === 'chat') {
-      const lastId = data.messages.length ? data.messages[data.messages.length - 1].id : null;
-      if (lastId !== chatLastRenderedId) renderChatMessages(true);
-    }
+    if (state.currentScreen === 'chat') { renderChatMessages(false); markChatSeen(); }
+    else updateChatBadge();
   } catch {}
 }
 
@@ -932,16 +1013,37 @@ async function sendMessage() {
   if (!input) return;
   const text = input.value.trim();
   if (!text) return;
-  if (!state.isOnline || !state.user?.token) { showToast('Нет связи — сообщение не отправлено'); return; }
   input.value = '';
+  const msg = { id: 'msg' + Date.now() + Math.floor(Math.random() * 1000), text, ts: Date.now(), userName: myName(), role: state.user?.role, status: 'sending' };
+  state.pendingMsgs = state.pendingMsgs || [];
+  state.pendingMsgs.push(msg);
+  renderChatMessages(true);
+  deliverMsg(msg);
+}
+async function deliverMsg(msg) {
+  if (!state.isOnline || !state.user?.token) { setMsgStatus(msg.id, 'failed'); return; }
   try {
-    await fetch(`${API_URL}/api/messages`, {
+    const res = await fetch(`${API_URL}/api/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
-      body: JSON.stringify({ id: 'msg' + Date.now() + Math.floor(Math.random() * 1000), text, ts: Date.now() }),
+      body: JSON.stringify({ id: msg.id, text: msg.text, ts: msg.ts }),
     });
-    await pollMessages();
-  } catch { showToast('Не удалось отправить'); input.value = text; }
+    if (!res.ok) throw new Error('http');
+    setMsgStatus(msg.id, 'sent');
+    pollMessages();
+  } catch { setMsgStatus(msg.id, 'failed'); }
+}
+function setMsgStatus(id, status) {
+  const m = (state.pendingMsgs || []).find(x => x.id === id);
+  if (m) m.status = status;
+  if (state.currentScreen === 'chat') renderChatMessages(false);
+}
+function retrySend(id) {
+  const m = (state.pendingMsgs || []).find(x => x.id === id);
+  if (!m) return;
+  m.status = 'sending';
+  renderChatMessages(false);
+  deliverMsg(m);
 }
 
 const PROJECT_TYPES = ['СПС','СОУЭ','СОТС','СКУД','АППЗ','Другое'];
@@ -1175,7 +1277,7 @@ function startApp() {
   document.getElementById('loginScreen').classList.remove('show');
   updateOfflineBanner();
   showScreen('home');
-  if (state.isOnline && state.user?.token) { syncAll(true); }
+  if (state.isOnline && state.user?.token) { syncAll(true); pollMessages(); }
 }
 init();
 
