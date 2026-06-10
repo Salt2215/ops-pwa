@@ -91,6 +91,15 @@ async function initDB() {
       owner_uid BIGINT,
       created_at TIMESTAMP DEFAULT NOW()
     );
+    CREATE TABLE IF NOT EXISTS pwa_messages (
+      id TEXT PRIMARY KEY,
+      uid BIGINT,
+      user_name TEXT,
+      role TEXT,
+      text TEXT,
+      ts BIGINT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
     ALTER TABLE pwa_objects ADD COLUMN IF NOT EXISTS assigned_to TEXT DEFAULT '';
     ALTER TABLE pwa_team    ADD COLUMN IF NOT EXISTS login_code TEXT;
     ALTER TABLE pwa_entries ADD COLUMN IF NOT EXISTS user_name TEXT;
@@ -285,6 +294,26 @@ app.post('/api/team/sync', auth, async (req, res) => {
     console.error(e);
     res.status(500).json({ error: e.message });
   }
+});
+
+// Чат — общий канал для всех вошедших
+app.get('/api/messages', auth, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM (SELECT * FROM pwa_messages ORDER BY ts DESC LIMIT 200) m ORDER BY ts ASC');
+    res.json({ messages: rows.map(m => ({ id: m.id, userName: m.user_name, role: m.role, text: m.text, ts: m.ts })) });
+  } catch (e) { console.error(e); res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/messages', auth, async (req, res) => {
+  try {
+    const { id, text, ts } = req.body;
+    if (!text || !text.trim()) return res.status(400).json({ error: 'empty' });
+    await pool.query(
+      'INSERT INTO pwa_messages (id,uid,user_name,role,text,ts) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO NOTHING',
+      [id, req.user.uid, req.user.name, req.user.role, text.trim().slice(0, 2000), ts || Date.now()]
+    );
+    res.json({ ok: true });
+  } catch (e) { console.error(e); res.status(500).json({ error: e.message }); }
 });
 
 // Вход от Telegram-бота (на будущее) — тоже создаёт сессию
