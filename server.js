@@ -78,6 +78,19 @@ async function initDB() {
       team_id TEXT,
       created_at TIMESTAMP DEFAULT NOW()
     );
+    CREATE TABLE IF NOT EXISTS pwa_projects (
+      id TEXT PRIMARY KEY,
+      object_id TEXT,
+      type TEXT DEFAULT '',
+      plan_cable INT DEFAULT 0,
+      cable_type TEXT DEFAULT '',
+      plan_devices INT DEFAULT 0,
+      device_type TEXT DEFAULT '',
+      drawing_url TEXT DEFAULT '',
+      drawing_name TEXT DEFAULT '',
+      owner_uid BIGINT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
     ALTER TABLE pwa_objects ADD COLUMN IF NOT EXISTS assigned_to TEXT DEFAULT '';
     ALTER TABLE pwa_team    ADD COLUMN IF NOT EXISTS login_code TEXT;
     ALTER TABLE pwa_entries ADD COLUMN IF NOT EXISTS user_name TEXT;
@@ -150,6 +163,11 @@ app.get('/api/sync', auth, async (req, res) => {
       ? (await pool.query('SELECT * FROM pwa_team ORDER BY created_at DESC')).rows
       : [];
 
+    // Проекты — по тем объектам, что доступны пользователю
+    const projRows = objIds.length > 0
+      ? (await pool.query(`SELECT * FROM pwa_projects WHERE object_id = ANY($1) ORDER BY created_at DESC`, [objIds])).rows
+      : [];
+
     const normObj = objects.map(o => ({
       id: o.id, name: o.name, address: o.address, customer: o.customer,
       status: o.status, planCable: o.plan_cable, planDevices: o.plan_devices,
@@ -160,8 +178,14 @@ app.get('/api/sync', auth, async (req, res) => {
       id: e.id, objectId: e.object_id, text: e.text, userName: e.user_name || '',
       cable: e.cable, devices: e.devices, problem: e.problem, ts: e.ts, synced: true
     }));
+    const normProj = projRows.map(p => ({
+      id: p.id, objectId: p.object_id, type: p.type,
+      planCable: p.plan_cable, cableType: p.cable_type,
+      planDevices: p.plan_devices, deviceType: p.device_type,
+      drawingUrl: p.drawing_url, drawingName: p.drawing_name, ts: p.created_at
+    }));
 
-    res.json({ objects: normObj, team: normTeam, entries: normEnt });
+    res.json({ objects: normObj, team: normTeam, entries: normEnt, projects: normProj });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: e.message });
@@ -202,6 +226,38 @@ app.post('/api/objects/sync', auth, async (req, res) => {
         [o.id, o.name, o.address || '', o.customer || '', o.status || 'active', o.planCable || 0, o.planDevices || 0, JSON.stringify(o.assignedTo || []), req.user.uid]
       );
     }
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Проекты — сохранять может только инженер (upsert)
+app.post('/api/projects/sync', auth, async (req, res) => {
+  try {
+    if (!isEngineer(req.user)) return res.json({ ok: true });
+    const projects = req.body.projects || [];
+    for (const p of projects) {
+      await pool.query(
+        `INSERT INTO pwa_projects (id,object_id,type,plan_cable,cable_type,plan_devices,device_type,drawing_url,drawing_name,owner_uid)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         ON CONFLICT (id) DO UPDATE SET object_id=$2,type=$3,plan_cable=$4,cable_type=$5,plan_devices=$6,device_type=$7,drawing_url=$8,drawing_name=$9`,
+        [p.id, p.objectId, p.type || '', p.planCable || 0, p.cableType || '', p.planDevices || 0, p.deviceType || '', p.drawingUrl || '', p.drawingName || '', req.user.uid]
+      );
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Удаление проекта — только инженер
+app.post('/api/projects/delete', auth, async (req, res) => {
+  try {
+    if (!isEngineer(req.user)) return res.status(403).json({ error: 'forbidden' });
+    await pool.query('DELETE FROM pwa_projects WHERE id=$1', [req.body.id]);
     res.json({ ok: true });
   } catch (e) {
     console.error(e);
