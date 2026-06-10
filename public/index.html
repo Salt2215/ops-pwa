@@ -48,7 +48,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .content { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
-.nav { display: grid; grid-template-columns: repeat(4, 1fr); background: var(--bg2); border-top: 1px solid var(--border); flex-shrink: 0; padding-bottom: env(safe-area-inset-bottom); }
+.nav { display: grid; grid-template-columns: repeat(5, 1fr); background: var(--bg2); border-top: 1px solid var(--border); flex-shrink: 0; padding-bottom: env(safe-area-inset-bottom); }
 .nav-item { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 10px 4px; cursor: pointer; border: none; background: transparent; color: var(--text3); font-family: var(--font); font-size: 10px; transition: color .2s; }
 .nav-item.active { color: var(--accent); }
 .nav-item svg { width: 22px; height: 22px; }
@@ -223,6 +223,10 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
       Объекты
     </button>
+    <button class="nav-item" onclick="showScreen('projects')" id="nav-projects">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/><path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/></svg>
+      Проекты
+    </button>
     <button class="nav-item" onclick="showScreen('journal')" id="nav-journal">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
       Журнал
@@ -314,6 +318,55 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   </div>
 </div>
 
+<!-- Add/Edit Project Modal -->
+<div class="modal-overlay" id="addProjectModal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title" id="projModalTitle">📐 Новый проект</div>
+    <div class="form-group">
+      <label class="form-label">Объект</label>
+      <select class="form-select" id="projObject"></select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Подсистема</label>
+      <select class="form-select" id="projType">
+        <option>СПС</option><option>СОУЭ</option><option>СОТС</option>
+        <option>СКУД</option><option>АППЗ</option><option>Другое</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">План кабеля (м)</label>
+        <input class="form-input" type="number" id="projPlanCable" placeholder="0">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Тип кабеля</label>
+        <input class="form-input" id="projCableType" placeholder="КПСнг(А)-FRLS">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">План приборов (шт)</label>
+        <input class="form-input" type="number" id="projPlanDevices" placeholder="0">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Тип приборов</label>
+        <input class="form-input" id="projDeviceType" placeholder="ИП 212-...">
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Ссылка на чертёж (необязательно)</label>
+      <input class="form-input" id="projDrawingUrl" placeholder="https://cloud.mail.ru/...">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Название чертежа (необязательно)</label>
+      <input class="form-input" id="projDrawingName" placeholder="План 3 этажа">
+    </div>
+    <button class="btn btn-primary" onclick="saveProject()" style="margin-bottom:10px">💾 Сохранить</button>
+    <button class="btn btn-secondary" onclick="closeModal('addProjectModal')">Отмена</button>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -325,6 +378,7 @@ let state = {
   entries: JSON.parse(localStorage.getItem('ops_entries') || '[]'),
   pendingEntries: JSON.parse(localStorage.getItem('ops_pending') || '[]'),
   team: JSON.parse(localStorage.getItem('ops_team') || '[]'),
+  projects: JSON.parse(localStorage.getItem('ops_projects') || '[]'),
   currentScreen: 'home',
   isOnline: navigator.onLine,
 };
@@ -360,7 +414,7 @@ function showScreen(name) {
   document.getElementById(`nav-${name}`).classList.add('active');
   const fab = document.getElementById('fabBtn');
   fab.style.display = ['home','journal'].includes(name) ? 'flex' : 'none';
-  const titles = { home: 'ОПС Журнал', objects: 'Объекты', journal: 'Журнал работ', profile: 'Профиль' };
+  const titles = { home: 'ОПС Журнал', objects: 'Объекты', projects: 'Проекты', journal: 'Журнал работ', profile: 'Профиль' };
   document.getElementById('headerTitle').textContent = titles[name];
   renderScreen(name);
 }
@@ -368,6 +422,7 @@ function renderScreen(name) {
   const c = document.getElementById('mainContent');
   if (name === 'home')    renderHome(c);
   if (name === 'objects') renderObjects(c);
+  if (name === 'projects') renderProjects(c);
   if (name === 'journal') renderJournal(c);
   if (name === 'profile') renderProfile(c);
 }
@@ -552,7 +607,7 @@ async function doLogin() {
     const data = await res.json();
     state.user = { token: data.token, name: data.name, role: data.role, teamId: data.teamId || null };
     // чистим локальные данные — дальше всё придёт с сервера по роли
-    state.objects = []; state.entries = []; state.pendingEntries = []; state.team = [];
+    state.objects = []; state.entries = []; state.pendingEntries = []; state.team = []; state.projects = [];
     input.value = '';
     saveLocal();
     startApp();
@@ -795,6 +850,142 @@ async function syncEntry(entry) {
     return res.ok;
   } catch { return false; }
 }
+const PROJECT_TYPES = ['СПС','СОУЭ','СОТС','СКУД','АППЗ','Другое'];
+let editingProjectId = null;
+
+function visibleProjects() {
+  const ids = new Set(visibleObjects().map(o => o.id));
+  return state.projects.filter(p => ids.has(p.objectId));
+}
+
+// ─── Projects screen ───
+function renderProjects(c) {
+  const objs = visibleObjects();
+  const projs = visibleProjects();
+  const eng = isEngineer();
+  let html = '<div style="padding:14px">';
+  if (eng) html += `<button class="btn btn-primary" onclick="showAddProject()" style="margin-bottom:14px">+ Новый проект</button>`;
+  if (projs.length === 0) {
+    html += `<div class="empty"><div class="empty-icon">📐</div><div class="empty-text">${eng ? 'Проектов пока нет.<br>Добавьте первый проект к объекту.' : 'Проектов по вашим объектам пока нет.'}</div></div>`;
+  } else {
+    objs.forEach(o => {
+      const list = projs.filter(p => p.objectId === o.id);
+      if (list.length === 0) return;
+      html += `<div class="section-header" style="padding-left:0">${o.name}</div>`;
+      list.forEach(p => { html += projectCardHtml(p, eng); });
+    });
+  }
+  html += '</div>';
+  c.innerHTML = html;
+}
+
+function projectCardHtml(p, eng) {
+  return `
+    <div class="entry-card" style="margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px">
+        <span class="entry-tag">${p.type || 'Проект'}</span>
+        ${eng ? `<div style="display:flex;gap:6px">
+          <button class="btn btn-secondary btn-sm" onclick="editProject('${p.id}')">✏️</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteProject('${p.id}')">×</button>
+        </div>` : ''}
+      </div>
+      <div style="font-size:13px;color:var(--text2);line-height:1.7">
+        🧵 Кабель: <b>${p.planCable || 0} м</b>${p.cableType ? ' · ' + p.cableType : ''}<br>
+        🔌 Приборы: <b>${p.planDevices || 0} шт</b>${p.deviceType ? ' · ' + p.deviceType : ''}
+      </div>
+      ${p.drawingUrl ? `<div style="margin-top:8px"><button class="btn btn-secondary btn-sm" onclick="openDrawing('${p.id}')">📐 ${p.drawingName || 'Открыть чертёж'}</button></div>` : ''}
+    </div>`;
+}
+
+function openDrawing(id) {
+  const p = state.projects.find(x => x.id === id);
+  if (!p || !p.drawingUrl) return;
+  let url = p.drawingUrl.trim();
+  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+  window.open(url, '_blank', 'noopener');
+}
+
+function fillProjectObjectSelect(selectedId) {
+  document.getElementById('projObject').innerHTML =
+    visibleObjects().map(o => `<option value="${o.id}" ${o.id===selectedId?'selected':''}>${o.name}</option>`).join('');
+}
+
+function showAddProject() {
+  if (!isEngineer()) return;
+  if (visibleObjects().length === 0) { showToast('Сначала создайте объект'); return; }
+  editingProjectId = null;
+  document.getElementById('projModalTitle').textContent = '📐 Новый проект';
+  fillProjectObjectSelect(null);
+  document.getElementById('projType').value = PROJECT_TYPES[0];
+  ['projPlanCable','projCableType','projPlanDevices','projDeviceType','projDrawingUrl','projDrawingName']
+    .forEach(id => document.getElementById(id).value = '');
+  showModal('addProjectModal');
+}
+
+function editProject(id) {
+  const p = state.projects.find(x => x.id === id);
+  if (!p) return;
+  editingProjectId = id;
+  document.getElementById('projModalTitle').textContent = '✏️ Проект';
+  fillProjectObjectSelect(p.objectId);
+  document.getElementById('projType').value = p.type || PROJECT_TYPES[0];
+  document.getElementById('projPlanCable').value = p.planCable || '';
+  document.getElementById('projCableType').value = p.cableType || '';
+  document.getElementById('projPlanDevices').value = p.planDevices || '';
+  document.getElementById('projDeviceType').value = p.deviceType || '';
+  document.getElementById('projDrawingUrl').value = p.drawingUrl || '';
+  document.getElementById('projDrawingName').value = p.drawingName || '';
+  showModal('addProjectModal');
+}
+
+function saveProject() {
+  const objectId = document.getElementById('projObject').value;
+  if (!objectId) { showToast('Выберите объект'); return; }
+  const data = {
+    objectId,
+    type: document.getElementById('projType').value,
+    planCable: parseInt(document.getElementById('projPlanCable').value) || 0,
+    cableType: document.getElementById('projCableType').value.trim(),
+    planDevices: parseInt(document.getElementById('projPlanDevices').value) || 0,
+    deviceType: document.getElementById('projDeviceType').value.trim(),
+    drawingUrl: document.getElementById('projDrawingUrl').value.trim(),
+    drawingName: document.getElementById('projDrawingName').value.trim(),
+  };
+  if (editingProjectId) {
+    const p = state.projects.find(x => x.id === editingProjectId);
+    if (p) Object.assign(p, data);
+  } else {
+    state.projects.push({ id: 'p' + Date.now(), ts: Date.now(), ...data });
+  }
+  saveLocal(); syncProjects(); closeModal('addProjectModal'); renderScreen('projects');
+  showToast('✅ Проект сохранён');
+}
+
+function deleteProject(id) {
+  if (!confirm('Удалить проект?')) return;
+  state.projects = state.projects.filter(p => p.id !== id);
+  saveLocal();
+  if (state.isOnline && state.user?.token) {
+    fetch(`${API_URL}/api/projects/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
+      body: JSON.stringify({ id }),
+    }).catch(() => {});
+  }
+  renderScreen('projects'); showToast('Удалён');
+}
+
+async function syncProjects() {
+  if (!state.isOnline || !state.user?.token || !isEngineer()) return;
+  try {
+    await fetch(`${API_URL}/api/projects/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user?.token}` },
+      body: JSON.stringify({ projects: state.projects }),
+    });
+  } catch {}
+}
+
 async function syncObjects() {
   if (!state.isOnline || !state.user?.token || !isEngineer()) return;
   try {
@@ -823,6 +1014,7 @@ async function syncAll(silent = false) {
 
   await syncObjects();
   await syncTeam();
+  await syncProjects();
 
   const synced = [];
   for (const entry of state.pendingEntries) {
@@ -837,6 +1029,7 @@ async function syncAll(silent = false) {
       const data = await res.json();
       if (Array.isArray(data.objects)) state.objects = data.objects;
       if (Array.isArray(data.team)) state.team = data.team;
+      if (Array.isArray(data.projects)) state.projects = data.projects;
       if (Array.isArray(data.entries)) {
         const ids = new Set(state.entries.map(e => e.id));
         data.entries.forEach(e => { if (!ids.has(e.id)) state.entries.push(e); });
@@ -857,6 +1050,7 @@ function saveLocal() {
   localStorage.setItem('ops_entries', JSON.stringify(state.entries));
   localStorage.setItem('ops_pending', JSON.stringify(state.pendingEntries));
   localStorage.setItem('ops_team',    JSON.stringify(state.team));
+  localStorage.setItem('ops_projects', JSON.stringify(state.projects));
   localStorage.setItem('ops_user',    JSON.stringify(state.user));
 }
 
