@@ -48,7 +48,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .content { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
-.nav { display: grid; grid-template-columns: repeat(5, 1fr); background: var(--bg2); border-top: 1px solid var(--border); flex-shrink: 0; padding-bottom: env(safe-area-inset-bottom); }
+.nav { display: grid; grid-template-columns: repeat(6, 1fr); background: var(--bg2); border-top: 1px solid var(--border); flex-shrink: 0; padding-bottom: env(safe-area-inset-bottom); }
 .nav-item { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 10px 4px; cursor: pointer; border: none; background: transparent; color: var(--text3); font-family: var(--font); font-size: 10px; transition: color .2s; }
 .nav-item.active { color: var(--accent); }
 .nav-item svg { width: 22px; height: 22px; }
@@ -177,6 +177,17 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 .login-hint { font-size: 12px; color: var(--text3); margin-top: 16px; line-height: 1.5; }
 .member-code { font-size: 12px; color: var(--text2); margin-top: 3px; }
 .member-code b { font-family: var(--mono); color: var(--accent2); font-weight: 500; }
+
+/* Chat */
+.chat-list { padding: 14px; padding-bottom: 80px; display: flex; flex-direction: column; gap: 8px; }
+.chat-msg { max-width: 80%; padding: 8px 12px; border-radius: 14px; font-size: 14px; line-height: 1.4; word-wrap: break-word; white-space: pre-wrap; }
+.chat-msg .chat-meta { font-size: 11px; margin-bottom: 3px; opacity: .85; }
+.chat-mine { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+.chat-other { align-self: flex-start; background: var(--bg3); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+.chat-input-bar { position: fixed; left: 0; right: 0; bottom: calc(57px + env(safe-area-inset-bottom)); display: flex; gap: 8px; padding: 10px 12px; background: var(--bg2); border-top: 1px solid var(--border); z-index: 9; }
+.chat-input-bar input { flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 20px; padding: 10px 14px; color: var(--text); font-family: var(--font); font-size: 14px; outline: none; }
+.chat-input-bar input:focus { border-color: var(--accent); }
+.chat-send { background: var(--accent); color: #fff; border: none; border-radius: 50%; width: 40px; height: 40px; font-size: 15px; cursor: pointer; flex-shrink: 0; }
 </style>
 </head>
 <body>
@@ -230,6 +241,10 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
     <button class="nav-item" onclick="showScreen('journal')" id="nav-journal">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
       Журнал
+    </button>
+    <button class="nav-item" onclick="showScreen('chat')" id="nav-chat">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>
+      Чат
     </button>
     <button class="nav-item" onclick="showScreen('profile')" id="nav-profile">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
@@ -379,6 +394,7 @@ let state = {
   pendingEntries: JSON.parse(localStorage.getItem('ops_pending') || '[]'),
   team: JSON.parse(localStorage.getItem('ops_team') || '[]'),
   projects: JSON.parse(localStorage.getItem('ops_projects') || '[]'),
+  messages: JSON.parse(localStorage.getItem('ops_messages') || '[]'),
   currentScreen: 'home',
   isOnline: navigator.onLine,
 };
@@ -414,15 +430,18 @@ function showScreen(name) {
   document.getElementById(`nav-${name}`).classList.add('active');
   const fab = document.getElementById('fabBtn');
   fab.style.display = ['home','journal'].includes(name) ? 'flex' : 'none';
-  const titles = { home: 'ОПС Журнал', objects: 'Объекты', projects: 'Проекты', journal: 'Журнал работ', profile: 'Профиль' };
+  const titles = { home: 'ОПС Журнал', objects: 'Объекты', projects: 'Проекты', journal: 'Журнал работ', chat: 'Чат бригады', profile: 'Профиль' };
   document.getElementById('headerTitle').textContent = titles[name];
   renderScreen(name);
+  if (chatPollTimer) { clearInterval(chatPollTimer); chatPollTimer = null; }
+  if (name === 'chat') { pollMessages(); chatPollTimer = setInterval(pollMessages, 4000); }
 }
 function renderScreen(name) {
   const c = document.getElementById('mainContent');
   if (name === 'home')    renderHome(c);
   if (name === 'objects') renderObjects(c);
   if (name === 'projects') renderProjects(c);
+  if (name === 'chat') renderChat(c);
   if (name === 'journal') renderJournal(c);
   if (name === 'profile') renderProfile(c);
 }
@@ -607,7 +626,7 @@ async function doLogin() {
     const data = await res.json();
     state.user = { token: data.token, name: data.name, role: data.role, teamId: data.teamId || null };
     // чистим локальные данные — дальше всё придёт с сервера по роли
-    state.objects = []; state.entries = []; state.pendingEntries = []; state.team = []; state.projects = [];
+    state.objects = []; state.entries = []; state.pendingEntries = []; state.team = []; state.projects = []; state.messages = [];
     input.value = '';
     saveLocal();
     startApp();
@@ -850,6 +869,81 @@ async function syncEntry(entry) {
     return res.ok;
   } catch { return false; }
 }
+// ─── Chat ───
+let chatPollTimer = null;
+let chatLastRenderedId = null;
+
+function escapeText(t) {
+  return (t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function renderChat(c) {
+  c.innerHTML = `
+    <div class="chat-list" id="chatMessages"></div>
+    <div class="chat-input-bar">
+      <input id="chatInput" placeholder="Сообщение..." autocomplete="off" onkeydown="if(event.key==='Enter')sendMessage()">
+      <button class="chat-send" onclick="sendMessage()">➤</button>
+    </div>`;
+  chatLastRenderedId = null;
+  renderChatMessages(true);
+}
+
+function renderChatMessages(forceScroll) {
+  const box = document.getElementById('chatMessages');
+  if (!box) return;
+  const msgs = state.messages || [];
+  if (msgs.length === 0) {
+    box.innerHTML = `<div class="empty" style="margin-top:30px"><div class="empty-icon">💬</div><div class="empty-text">Сообщений пока нет.<br>Напишите первым!</div></div>`;
+    chatLastRenderedId = null;
+    return;
+  }
+  box.innerHTML = msgs.map(m => {
+    const mine = m.userName === myName();
+    const crown = (m.role === 'engineer' || m.role === 'admin') ? '👑 ' : '';
+    const time = new Date(Number(m.ts)).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    return `<div class="chat-msg ${mine ? 'chat-mine' : 'chat-other'}">
+      <div class="chat-meta">${crown}${escapeText(m.userName || 'Без имени')} · ${time}</div>
+      ${escapeText(m.text)}
+    </div>`;
+  }).join('');
+  chatLastRenderedId = msgs[msgs.length - 1].id;
+  const content = document.getElementById('mainContent');
+  if (forceScroll && content) content.scrollTop = content.scrollHeight;
+}
+
+async function pollMessages() {
+  if (!state.isOnline || !state.user?.token) return;
+  try {
+    const res = await fetch(`${API_URL}/api/messages`, { headers: { 'Authorization': `Bearer ${state.user.token}` } });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!Array.isArray(data.messages)) return;
+    state.messages = data.messages;
+    saveLocal();
+    if (state.currentScreen === 'chat') {
+      const lastId = data.messages.length ? data.messages[data.messages.length - 1].id : null;
+      if (lastId !== chatLastRenderedId) renderChatMessages(true);
+    }
+  } catch {}
+}
+
+async function sendMessage() {
+  const input = document.getElementById('chatInput');
+  if (!input) return;
+  const text = input.value.trim();
+  if (!text) return;
+  if (!state.isOnline || !state.user?.token) { showToast('Нет связи — сообщение не отправлено'); return; }
+  input.value = '';
+  try {
+    await fetch(`${API_URL}/api/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
+      body: JSON.stringify({ id: 'msg' + Date.now() + Math.floor(Math.random() * 1000), text, ts: Date.now() }),
+    });
+    await pollMessages();
+  } catch { showToast('Не удалось отправить'); input.value = text; }
+}
+
 const PROJECT_TYPES = ['СПС','СОУЭ','СОТС','СКУД','АППЗ','Другое'];
 let editingProjectId = null;
 
@@ -1051,6 +1145,7 @@ function saveLocal() {
   localStorage.setItem('ops_pending', JSON.stringify(state.pendingEntries));
   localStorage.setItem('ops_team',    JSON.stringify(state.team));
   localStorage.setItem('ops_projects', JSON.stringify(state.projects));
+  localStorage.setItem('ops_messages', JSON.stringify(state.messages));
   localStorage.setItem('ops_user',    JSON.stringify(state.user));
 }
 
