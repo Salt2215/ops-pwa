@@ -429,6 +429,8 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   </div>
 </div>
 
+<input type="file" id="planFileInput" accept="image/*" style="display:none" onchange="handlePlanFile(event)">
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -774,6 +776,9 @@ function showObjectDetail(id) {
       <div class="progress-bar"><div class="progress-fill" style="width:${Math.min(totalCable/obj.planCable*100,100)}%"></div></div>
     </div>` : ''}
 
+    <div class="card-title">План объекта</div>
+    <div id="planBox" style="margin-bottom:14px"></div>
+
     <div class="card-title">Шлейфы</div>
     ${isEngineer() ? `<button class="btn btn-secondary btn-sm" onclick="closeModal('objectDetailModal');showAddShleyf('${obj.id}')" style="margin-bottom:8px">+ Шлейф</button>` : ''}
     ${shleyfyForObject(obj.id).length
@@ -809,6 +814,7 @@ function showObjectDetail(id) {
     </div>
   `;
   showModal('objectDetailModal');
+  renderPlanBox(id);
 }
 
 function toggleAssign(objId, teamId) {
@@ -1107,6 +1113,8 @@ const SHLEYF_STATUS = { todo:'Не начат', wip:'В работе', done:'Г�
 const SHLEYF_COLORS = { todo:'var(--text3)', wip:'var(--yellow)', done:'var(--green)' };
 let addShleyfObjId = null;
 let editingShleyfId = null;
+let planCache = {};
+let currentPlanObjId = null;
 
 function shleyfyForObject(objId) {
   return state.shleyfy.filter(s => s.objectId === objId).sort((a,b) => (a.ts||0)-(b.ts||0));
@@ -1298,6 +1306,99 @@ function addShleyfLog(id) {
   }).catch(() => {});
   showShleyfDetail(id);
   showToast('✅ Запись добавлена');
+}
+
+// ─── План объекта (картинка) ───
+function renderPlanBox(objId) {
+  const box = document.getElementById('planBox');
+  if (!box) return;
+  const obj = state.objects.find(o => o.id === objId);
+  const eng = isEngineer();
+  if (planCache[objId]) { box.innerHTML = planImgHtml(objId, eng); return; }
+  if (obj && obj.hasPlan && state.isOnline && state.user?.token) {
+    box.innerHTML = '<div style="font-size:13px;color:var(--text3)">Загрузка плана…</div>';
+    fetch(`${API_URL}/api/plan/${objId}`, { headers: { 'Authorization': `Bearer ${state.user.token}` } })
+      .then(r => r.json())
+      .then(d => {
+        const b = document.getElementById('planBox');
+        if (!b) return;
+        if (d.image) { planCache[objId] = d.image; b.innerHTML = planImgHtml(objId, eng); }
+        else b.innerHTML = planEmptyHtml(objId, eng);
+      })
+      .catch(() => { const b = document.getElementById('planBox'); if (b) b.innerHTML = planEmptyHtml(objId, eng); });
+    return;
+  }
+  box.innerHTML = planEmptyHtml(objId, eng);
+}
+function planImgHtml(objId, eng) {
+  return `<img src="${planCache[objId]}" style="width:100%;border-radius:8px;border:1px solid var(--border);display:block">
+    ${eng ? `<div style="display:flex;gap:6px;margin-top:8px">
+      <button class="btn btn-secondary btn-sm" onclick="triggerPlanUpload('${objId}')">Заменить план</button>
+      <button class="btn btn-danger btn-sm" onclick="deletePlan('${objId}')">Удалить план</button>
+    </div>` : ''}`;
+}
+function planEmptyHtml(objId, eng) {
+  return eng
+    ? `<button class="btn btn-secondary btn-sm" onclick="triggerPlanUpload('${objId}')">📷 Загрузить план</button>`
+    : `<div style="font-size:13px;color:var(--text3)">План пока не загружен.</div>`;
+}
+function triggerPlanUpload(objId) {
+  if (!isEngineer()) return;
+  if (!state.isOnline || !state.user?.token) { showToast('Загрузка плана — только онлайн'); return; }
+  currentPlanObjId = objId;
+  const inp = document.getElementById('planFileInput');
+  inp.value = '';
+  inp.click();
+}
+function handlePlanFile(ev) {
+  const file = ev.target.files && ev.target.files[0];
+  if (!file) return;
+  const objId = currentPlanObjId;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      const maxW = 1400;
+      const scale = Math.min(1, maxW / img.width);
+      const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+      planCache[objId] = dataUrl;
+      const obj = state.objects.find(o => o.id === objId);
+      if (obj) obj.hasPlan = true;
+      saveLocal();
+      renderPlanBox(objId);
+      showToast('Загрузка плана…');
+      fetch(`${API_URL}/api/plan/save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
+        body: JSON.stringify({ objectId: objId, image: dataUrl }),
+      })
+        .then(r => r.ok ? showToast('✅ План загружен') : showToast('Не удалось загрузить план'))
+        .catch(() => showToast('Не удалось загрузить план'));
+    };
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+}
+function deletePlan(objId) {
+  if (!isEngineer()) return;
+  if (!confirm('Удалить план объекта?')) return;
+  delete planCache[objId];
+  const obj = state.objects.find(o => o.id === objId);
+  if (obj) obj.hasPlan = false;
+  saveLocal();
+  if (state.isOnline && state.user?.token) {
+    fetch(`${API_URL}/api/plan/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
+      body: JSON.stringify({ objectId: objId }),
+    }).catch(() => {});
+  }
+  renderPlanBox(objId);
+  showToast('План удалён');
 }
 
 // ─── Projects screen ───
