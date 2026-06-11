@@ -420,6 +420,15 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   </div>
 </div>
 
+<!-- Shleyf Detail Modal -->
+<div class="modal-overlay" id="shleyfDetailModal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div id="shleyfDetailContent"></div>
+    <button class="btn btn-secondary" onclick="closeModal('shleyfDetailModal')" style="margin-top:10px">Закрыть</button>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -1108,7 +1117,7 @@ function shleyfRowHtml(s, eng) {
   const pct = plan > 0 ? Math.min(Math.round(done/plan*100), 100) : 0;
   const col = SHLEYF_COLORS[s.status] || SHLEYF_COLORS.todo;
   return `
-    <div class="entry-card" style="margin-bottom:8px">
+    <div class="entry-card" style="margin-bottom:8px;cursor:pointer" onclick="showShleyfDetail('${s.id}')">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:4px">
         <span style="font-weight:600">🧵 ${s.name}<span style="font-size:12px;color:var(--text3);font-weight:400"> · ${s.system||''}</span></span>
         <span style="font-size:12px;font-weight:600;color:${col};white-space:nowrap">● ${SHLEYF_STATUS[s.status]||''}</span>
@@ -1116,8 +1125,8 @@ function shleyfRowHtml(s, eng) {
       <div style="font-size:13px;color:var(--text2)">План: ${plan} м · ${s.planDevices||0} приборов</div>
       ${plan>0 ? `<div class="progress-wrap" style="margin-top:6px"><div class="progress-label"><span>Проложено</span><span>${done}/${plan} м (${pct}%)</span></div><div class="progress-bar"><div class="progress-fill" style="width:${pct}%;background:${col}"></div></div></div>` : ''}
       ${eng ? `<div style="margin-top:8px;display:flex;gap:6px">
-        <button class="btn btn-secondary btn-sm" onclick="closeModal('objectDetailModal');editShleyf('${s.id}')">✏️</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteShleyf('${s.id}')">×</button>
+        <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();closeModal('objectDetailModal');editShleyf('${s.id}')">✏️</button>
+        <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteShleyf('${s.id}')">×</button>
       </div>` : ''}
     </div>`;
 }
@@ -1181,6 +1190,114 @@ function deleteShleyf(id) {
   }
   if (objId) showObjectDetail(objId);
   showToast('Удалён');
+}
+
+// ─── Детальное окно шлейфа: статус, прогресс, история ───
+function fmtLogDate(ts) {
+  const d = new Date(ts);
+  return d.toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit'}) + ' ' + d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
+}
+function shleyfLogFor(id) {
+  return state.shleyfLog.filter(l => l.shleyfId === id).sort((a,b) => (a.ts||0)-(b.ts||0));
+}
+
+function showShleyfDetail(id) {
+  const s = state.shleyfy.find(x => x.id === id);
+  if (!s) return;
+  const plan = s.planCable || 0, done = s.doneCable || 0;
+  const pct = plan > 0 ? Math.min(Math.round(done/plan*100), 100) : 0;
+  const col = SHLEYF_COLORS[s.status] || SHLEYF_COLORS.todo;
+  const logs = shleyfLogFor(id);
+  document.getElementById('shleyfDetailContent').innerHTML = `
+    <div class="modal-title" style="margin-bottom:2px">🧵 ${s.name}</div>
+    <div style="font-size:13px;color:var(--text3);margin-bottom:14px">${s.system||''}</div>
+
+    <div class="card-title">Статус</div>
+    <div style="display:flex;gap:6px;margin-bottom:14px">
+      ${['todo','wip','done'].map(st => `<button class="btn btn-sm ${s.status===st?'btn-primary':'btn-secondary'}" style="flex:1" onclick="setShleyfStatus('${id}','${st}')">${SHLEYF_STATUS[st]}</button>`).join('')}
+    </div>
+
+    <div class="card-title">Сколько сделано</div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Проложено кабеля (м)</label>
+        <input class="form-input" type="number" id="shDoneCable" value="${done}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Поставлено приборов (шт)</label>
+        <input class="form-input" type="number" id="shDoneDevices" value="${s.doneDevices||0}">
+      </div>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="saveShleyfProgress('${id}')" style="margin-bottom:12px">💾 Сохранить прогресс</button>
+    ${plan>0 ? `<div class="progress-wrap" style="margin-bottom:14px"><div class="progress-label"><span>Прогресс</span><span>${done}/${plan} м (${pct}%)</span></div><div class="progress-bar"><div class="progress-fill" style="width:${pct}%;background:${col}"></div></div></div>` : ''}
+
+    <div class="card-title">История по шлейфу</div>
+    ${logs.length
+      ? logs.map(l => `<div class="entry-card" style="margin-bottom:6px">
+          <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+            <span style="font-size:12px;color:var(--text3)">${fmtLogDate(l.ts)}${l.author?' · '+l.author:''}</span>
+            ${l.isProblem?'<span style="font-size:12px;color:var(--red);font-weight:600;white-space:nowrap">⚠️ проблема</span>':''}
+          </div>
+          <div style="font-size:14px;margin-top:2px">${l.text}</div>
+        </div>`).join('')
+      : '<div style="font-size:13px;color:var(--text3);margin-bottom:6px">Записей пока нет.</div>'}
+
+    <div class="form-group" style="margin-top:10px">
+      <label class="form-label">Добавить запись</label>
+      <textarea class="form-input" id="shLogText" rows="2" placeholder="Что сделал / какая проблема..."></textarea>
+    </div>
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text2);margin-bottom:10px">
+      <input type="checkbox" id="shLogProblem"> это проблема
+    </label>
+    <button class="btn btn-primary btn-sm" onclick="addShleyfLog('${id}')">+ Добавить запись</button>
+  `;
+  showModal('shleyfDetailModal');
+}
+
+function pushShleyfProgress(s) {
+  fetch(`${API_URL}/api/shleyfy/progress`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
+    body: JSON.stringify({ id: s.id, doneCable: s.doneCable||0, doneDevices: s.doneDevices||0, status: s.status }),
+  }).catch(() => {});
+}
+
+function setShleyfStatus(id, st) {
+  if (!state.isOnline || !state.user?.token) { showToast('Нет интернета — отметить можно онлайн'); return; }
+  const s = state.shleyfy.find(x => x.id === id);
+  if (!s) return;
+  s.status = st;
+  saveLocal(); pushShleyfProgress(s);
+  showObjectDetail(s.objectId); showShleyfDetail(id);
+}
+
+function saveShleyfProgress(id) {
+  if (!state.isOnline || !state.user?.token) { showToast('Нет интернета — отметить можно онлайн'); return; }
+  const s = state.shleyfy.find(x => x.id === id);
+  if (!s) return;
+  s.doneCable = parseInt(document.getElementById('shDoneCable').value) || 0;
+  s.doneDevices = parseInt(document.getElementById('shDoneDevices').value) || 0;
+  if (s.status === 'todo' && s.doneCable > 0) s.status = 'wip';
+  saveLocal(); pushShleyfProgress(s);
+  showObjectDetail(s.objectId); showShleyfDetail(id);
+  showToast('✅ Прогресс сохранён');
+}
+
+function addShleyfLog(id) {
+  if (!state.isOnline || !state.user?.token) { showToast('Нет интернета — записать можно онлайн'); return; }
+  const text = document.getElementById('shLogText').value.trim();
+  if (!text) { showToast('Напишите текст'); return; }
+  const isProblem = document.getElementById('shLogProblem').checked;
+  const logId = 'l' + Date.now(), ts = Date.now();
+  state.shleyfLog.push({ id: logId, shleyfId: id, author: myName(), text, isProblem, ts });
+  saveLocal();
+  fetch(`${API_URL}/api/shleyfy/log`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
+    body: JSON.stringify({ id, logId, text, isProblem, ts }),
+  }).catch(() => {});
+  showShleyfDetail(id);
+  showToast('✅ Запись добавлена');
 }
 
 // ─── Projects screen ───
