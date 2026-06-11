@@ -100,6 +100,29 @@ async function initDB() {
       ts BIGINT,
       created_at TIMESTAMP DEFAULT NOW()
     );
+    CREATE TABLE IF NOT EXISTS pwa_shleyfy (
+      id TEXT PRIMARY KEY,
+      object_id TEXT,
+      name TEXT DEFAULT '',
+      system TEXT DEFAULT '',
+      plan_cable INT DEFAULT 0,
+      plan_devices INT DEFAULT 0,
+      done_cable INT DEFAULT 0,
+      done_devices INT DEFAULT 0,
+      status TEXT DEFAULT 'todo',
+      assigned_to TEXT DEFAULT '',
+      owner_uid BIGINT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS pwa_shleyf_log (
+      id TEXT PRIMARY KEY,
+      shleyf_id TEXT,
+      author_name TEXT,
+      text TEXT,
+      is_problem BOOLEAN DEFAULT false,
+      ts BIGINT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
     ALTER TABLE pwa_objects ADD COLUMN IF NOT EXISTS assigned_to TEXT DEFAULT '';
     ALTER TABLE pwa_team    ADD COLUMN IF NOT EXISTS login_code TEXT;
     ALTER TABLE pwa_entries ADD COLUMN IF NOT EXISTS user_name TEXT;
@@ -177,6 +200,15 @@ app.get('/api/sync', auth, async (req, res) => {
       ? (await pool.query(`SELECT * FROM pwa_projects WHERE object_id = ANY($1) ORDER BY created_at DESC`, [objIds])).rows
       : [];
 
+    // Шлейфы — по доступным объектам; и их история
+    const shRows = objIds.length > 0
+      ? (await pool.query(`SELECT * FROM pwa_shleyfy WHERE object_id = ANY($1) ORDER BY created_at DESC`, [objIds])).rows
+      : [];
+    const shIds = shRows.map(s => s.id);
+    const logRows = shIds.length > 0
+      ? (await pool.query(`SELECT * FROM pwa_shleyf_log WHERE shleyf_id = ANY($1) ORDER BY ts ASC`, [shIds])).rows
+      : [];
+
     const normObj = objects.map(o => ({
       id: o.id, name: o.name, address: o.address, customer: o.customer,
       status: o.status, planCable: o.plan_cable, planDevices: o.plan_devices,
@@ -193,8 +225,18 @@ app.get('/api/sync', auth, async (req, res) => {
       planDevices: p.plan_devices, deviceType: p.device_type,
       drawingUrl: p.drawing_url, drawingName: p.drawing_name, ts: p.created_at
     }));
+    const normSh = shRows.map(s => ({
+      id: s.id, objectId: s.object_id, name: s.name, system: s.system,
+      planCable: s.plan_cable, planDevices: s.plan_devices,
+      doneCable: s.done_cable, doneDevices: s.done_devices,
+      status: s.status, assignedTo: s.assigned_to || '', ts: s.created_at
+    }));
+    const normLog = logRows.map(l => ({
+      id: l.id, shleyfId: l.shleyf_id, author: l.author_name,
+      text: l.text, isProblem: l.is_problem, ts: l.ts
+    }));
 
-    res.json({ objects: normObj, team: normTeam, entries: normEnt, projects: normProj });
+    res.json({ objects: normObj, team: normTeam, entries: normEnt, projects: normProj, shleyfy: normSh, shleyfLog: normLog });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: e.message });
@@ -274,21 +316,80 @@ app.post('/api/projects/delete', auth, async (req, res) => {
   }
 });
 
-// Команда — только инженер; сохраняем личные коды, удаляем выбывших
-app.post('/api/team/sync', auth, async (req, res) => {
+// ─── Шлейфы ─────────────────────────────────────────────────────────────────
+// Создавать/редактировать шлейф (название, система, план) — только инженер.
+// Прогресс (done_*) при этом НЕ трогаем — его ставит монтажник.
+app.post('/api/shleyfy/sync', auth, async (req, res) => {
   try {
     if (!isEngineer(req.user)) return res.json({ ok: true });
-    const team = req.body.team || [];
-    const ids = team.map(t => t.id);
-    if (ids.length > 0) await pool.query('DELETE FROM pwa_team WHERE id <> ALL($1)', [ids]);
-    else await pool.query('DELETE FROM pwa_team');
-    for (const t of team) {
+    const list = req.body.shleyfy || [];
+    for (const s of list) {
       await pool.query(
-        `INSERT INTO pwa_team (id,name,role,owner_uid,login_code) VALUES ($1,$2,$3,$4,$5)
-         ON CONFLICT (id) DO UPDATE SET name=$2, role=$3, login_code=COALESCE($5, pwa_team.login_code)`,
-        [t.id, t.name, t.role || 'worker', req.user.uid, t.code || null]
+        `INSERT INTO pwa_shleyfy (id,object_id,name,system,plan_cable,plan_devices,assigned_to,owner_uid)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         ON CONFLICT (id) DO UPDATE SET object_id=$2,name=$3,system=$4,plan_cable=$5,plan_devices=$6,assigned_to=$7`,
+        [s.id, s.objectId, s.name || '', s.system || '', s.planCable || 0, s.planDevices || 0, s.assignedTo || '', req.user.uid]
       );
     }
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Прогресс по шлейфу — монтажник по своему объекту (или инженер)
+app.post('/api/shleyfy/progress', auth, async (req, res) => {
+  try {
+    const { id, doneCable, doneDevices, status } = req.body;
+    const { rows } = await pool.query('SELECT object_id FROM pwa_shleyfy WHERE id=$1', [id]);
+    if (!rows[0]) return res.status(404).json({ error: 'Шлейф не найден' });
+    if (!isEngineer(req.user)) {
+      const o = await pool.query('SELECT assigned_to FROM pwa_objects WHERE id=$1', [rows[0].object_id]);
+      const allowed = o.rows[0] && safeArr(o.rows[0].assigned_to).includes(req.user.teamId);
+      if (!allowed) return res.status(403).json({ error: 'Объект вам не назначен' });
+    }
+    const st = ['todo', 'wip', 'done'].includes(status) ? status : 'todo';
+    await pool.query(
+      'UPDATE pwa_shleyfy SET done_cable=$2, done_devices=$3, status=$4 WHERE id=$1',
+      [id, doneCable || 0, doneDevices || 0, st]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// История по шлейфу — добавить запись (монтажник по своему объекту / инженер)
+app.post('/api/shleyfy/log', auth, async (req, res) => {
+  try {
+    const { id, logId, text, isProblem, ts } = req.body;
+    if (!text || !text.trim()) return res.status(400).json({ error: 'empty' });
+    const { rows } = await pool.query('SELECT object_id FROM pwa_shleyfy WHERE id=$1', [id]);
+    if (!rows[0]) return res.status(404).json({ error: 'Шлейф не найден' });
+    if (!isEngineer(req.user)) {
+      const o = await pool.query('SELECT assigned_to FROM pwa_objects WHERE id=$1', [rows[0].object_id]);
+      const allowed = o.rows[0] && safeArr(o.rows[0].assigned_to).includes(req.user.teamId);
+      if (!allowed) return res.status(403).json({ error: 'Объект вам не назначен' });
+    }
+    await pool.query(
+      'INSERT INTO pwa_shleyf_log (id,shleyf_id,author_name,text,is_problem,ts) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO NOTHING',
+      [logId, id, req.user.name, text.trim().slice(0, 1000), !!isProblem, ts || Date.now()]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Удаление шлейфа — только инженер (вместе с его историей)
+app.post('/api/shleyfy/delete', auth, async (req, res) => {
+  try {
+    if (!isEngineer(req.user)) return res.status(403).json({ error: 'forbidden' });
+    await pool.query('DELETE FROM pwa_shleyf_log WHERE shleyf_id=$1', [req.body.id]);
+    await pool.query('DELETE FROM pwa_shleyfy WHERE id=$1', [req.body.id]);
     res.json({ ok: true });
   } catch (e) {
     console.error(e);
