@@ -389,6 +389,37 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   </div>
 </div>
 
+<!-- Add/Edit Shleyf Modal -->
+<div class="modal-overlay" id="addShleyfModal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title">🧵 Шлейф</div>
+    <div class="form-group">
+      <label class="form-label">Название</label>
+      <input class="form-input" id="shName" placeholder="Шлейф 1">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Система</label>
+      <select class="form-select" id="shSystem">
+        <option>СПС</option><option>СОУЭ</option><option>СОТС</option>
+        <option>СКУД</option><option>АППЗ</option><option>Другое</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">План кабеля (м)</label>
+        <input class="form-input" type="number" id="shPlanCable" placeholder="0">
+      </div>
+      <div class="form-group">
+        <label class="form-label">План приборов (шт)</label>
+        <input class="form-input" type="number" id="shPlanDevices" placeholder="0">
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="saveShleyf()" style="margin-bottom:10px">💾 Сохранить</button>
+    <button class="btn btn-secondary" onclick="closeModal('addShleyfModal')">Отмена</button>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -401,6 +432,8 @@ let state = {
   pendingEntries: JSON.parse(localStorage.getItem('ops_pending') || '[]'),
   team: JSON.parse(localStorage.getItem('ops_team') || '[]'),
   projects: JSON.parse(localStorage.getItem('ops_projects') || '[]'),
+  shleyfy: JSON.parse(localStorage.getItem('ops_shleyfy') || '[]'),
+  shleyfLog: JSON.parse(localStorage.getItem('ops_shleyflog') || '[]'),
   messages: JSON.parse(localStorage.getItem('ops_messages') || '[]'),
   pendingMsgs: [],
   currentScreen: 'home',
@@ -732,6 +765,12 @@ function showObjectDetail(id) {
       <div class="progress-bar"><div class="progress-fill" style="width:${Math.min(totalCable/obj.planCable*100,100)}%"></div></div>
     </div>` : ''}
 
+    <div class="card-title">Шлейфы</div>
+    ${isEngineer() ? `<button class="btn btn-secondary btn-sm" onclick="closeModal('objectDetailModal');showAddShleyf('${obj.id}')" style="margin-bottom:8px">+ Шлейф</button>` : ''}
+    ${shleyfyForObject(obj.id).length
+      ? shleyfyForObject(obj.id).map(s => shleyfRowHtml(s, isEngineer())).join('')
+      : `<div style="font-size:13px;color:var(--text3);margin-bottom:8px">Шлейфов пока нет.</div>`}
+
     ${isEngineer() ? `
     <div class="card-title">Монтажники на объекте</div>
     ${state.team.length === 0 ? `<div style="font-size:13px;color:var(--text3);margin-bottom:6px">Добавьте монтажников в «Профиль → Команда».</div>` :
@@ -1054,6 +1093,96 @@ function visibleProjects() {
   return state.projects.filter(p => ids.has(p.objectId));
 }
 
+// ─── Шлейфы ───
+const SHLEYF_STATUS = { todo:'Не начат', wip:'В работе', done:'Готов' };
+const SHLEYF_COLORS = { todo:'var(--text3)', wip:'var(--yellow)', done:'var(--green)' };
+let addShleyfObjId = null;
+let editingShleyfId = null;
+
+function shleyfyForObject(objId) {
+  return state.shleyfy.filter(s => s.objectId === objId).sort((a,b) => (a.ts||0)-(b.ts||0));
+}
+
+function shleyfRowHtml(s, eng) {
+  const plan = s.planCable || 0, done = s.doneCable || 0;
+  const pct = plan > 0 ? Math.min(Math.round(done/plan*100), 100) : 0;
+  const col = SHLEYF_COLORS[s.status] || SHLEYF_COLORS.todo;
+  return `
+    <div class="entry-card" style="margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:4px">
+        <span style="font-weight:600">🧵 ${s.name}<span style="font-size:12px;color:var(--text3);font-weight:400"> · ${s.system||''}</span></span>
+        <span style="font-size:12px;font-weight:600;color:${col};white-space:nowrap">● ${SHLEYF_STATUS[s.status]||''}</span>
+      </div>
+      <div style="font-size:13px;color:var(--text2)">План: ${plan} м · ${s.planDevices||0} приборов</div>
+      ${plan>0 ? `<div class="progress-wrap" style="margin-top:6px"><div class="progress-label"><span>Проложено</span><span>${done}/${plan} м (${pct}%)</span></div><div class="progress-bar"><div class="progress-fill" style="width:${pct}%;background:${col}"></div></div></div>` : ''}
+      ${eng ? `<div style="margin-top:8px;display:flex;gap:6px">
+        <button class="btn btn-secondary btn-sm" onclick="closeModal('objectDetailModal');editShleyf('${s.id}')">✏️</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteShleyf('${s.id}')">×</button>
+      </div>` : ''}
+    </div>`;
+}
+
+function showAddShleyf(objId) {
+  if (!isEngineer()) return;
+  addShleyfObjId = objId;
+  editingShleyfId = null;
+  document.getElementById('shName').value = '';
+  document.getElementById('shSystem').value = 'СПС';
+  document.getElementById('shPlanCable').value = '';
+  document.getElementById('shPlanDevices').value = '';
+  showModal('addShleyfModal');
+}
+
+function editShleyf(id) {
+  const s = state.shleyfy.find(x => x.id === id);
+  if (!s || !isEngineer()) return;
+  addShleyfObjId = s.objectId;
+  editingShleyfId = id;
+  document.getElementById('shName').value = s.name || '';
+  document.getElementById('shSystem').value = s.system || 'СПС';
+  document.getElementById('shPlanCable').value = s.planCable || '';
+  document.getElementById('shPlanDevices').value = s.planDevices || '';
+  showModal('addShleyfModal');
+}
+
+function saveShleyf() {
+  const name = document.getElementById('shName').value.trim();
+  if (!name) { showToast('Введите название'); return; }
+  const data = {
+    objectId: addShleyfObjId,
+    name,
+    system: document.getElementById('shSystem').value,
+    planCable: parseInt(document.getElementById('shPlanCable').value) || 0,
+    planDevices: parseInt(document.getElementById('shPlanDevices').value) || 0,
+  };
+  if (editingShleyfId) {
+    const s = state.shleyfy.find(x => x.id === editingShleyfId);
+    if (s) Object.assign(s, data);
+  } else {
+    state.shleyfy.push({ id: 's' + Date.now(), ts: Date.now(), doneCable:0, doneDevices:0, status:'todo', assignedTo:'', ...data });
+  }
+  saveLocal(); syncShleyfy(); closeModal('addShleyfModal');
+  showObjectDetail(addShleyfObjId);
+  showToast('✅ Шлейф сохранён');
+}
+
+function deleteShleyf(id) {
+  if (!confirm('Удалить шлейф?')) return;
+  const s = state.shleyfy.find(x => x.id === id);
+  const objId = s ? s.objectId : null;
+  state.shleyfy = state.shleyfy.filter(x => x.id !== id);
+  saveLocal();
+  if (state.isOnline && state.user?.token) {
+    fetch(`${API_URL}/api/shleyfy/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
+      body: JSON.stringify({ id }),
+    }).catch(() => {});
+  }
+  if (objId) showObjectDetail(objId);
+  showToast('Удалён');
+}
+
 // ─── Projects screen ───
 function renderProjects(c) {
   const objs = visibleObjects();
@@ -1182,6 +1311,17 @@ async function syncProjects() {
   } catch {}
 }
 
+async function syncShleyfy() {
+  if (!state.isOnline || !state.user?.token || !isEngineer()) return;
+  try {
+    await fetch(`${API_URL}/api/shleyfy/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user?.token}` },
+      body: JSON.stringify({ shleyfy: state.shleyfy }),
+    });
+  } catch {}
+}
+
 async function syncObjects() {
   if (!state.isOnline || !state.user?.token || !isEngineer()) return;
   try {
@@ -1211,6 +1351,7 @@ async function syncAll(silent = false) {
   await syncObjects();
   await syncTeam();
   await syncProjects();
+  await syncShleyfy();
 
   const synced = [];
   for (const entry of state.pendingEntries) {
@@ -1226,6 +1367,8 @@ async function syncAll(silent = false) {
       if (Array.isArray(data.objects)) state.objects = data.objects;
       if (Array.isArray(data.team)) state.team = data.team;
       if (Array.isArray(data.projects)) state.projects = data.projects;
+      if (Array.isArray(data.shleyfy)) state.shleyfy = data.shleyfy;
+      if (Array.isArray(data.shleyfLog)) state.shleyfLog = data.shleyfLog;
       if (Array.isArray(data.entries)) {
         const ids = new Set(state.entries.map(e => e.id));
         data.entries.forEach(e => { if (!ids.has(e.id)) state.entries.push(e); });
@@ -1247,6 +1390,8 @@ function saveLocal() {
   localStorage.setItem('ops_pending', JSON.stringify(state.pendingEntries));
   localStorage.setItem('ops_team',    JSON.stringify(state.team));
   localStorage.setItem('ops_projects', JSON.stringify(state.projects));
+  localStorage.setItem('ops_shleyfy', JSON.stringify(state.shleyfy));
+  localStorage.setItem('ops_shleyflog', JSON.stringify(state.shleyfLog));
   localStorage.setItem('ops_messages', JSON.stringify(state.messages));
   localStorage.setItem('ops_user',    JSON.stringify(state.user));
 }
