@@ -9,7 +9,7 @@ const ENGINEER_CODE = (process.env.ENGINEER_CODE || '').trim(); // задаёт�
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
 
-app.use(express.json());
+app.use(express.json({ limit: '8mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 const safeArr = s => { try { return s ? JSON.parse(s) : []; } catch { return []; } };
@@ -123,6 +123,11 @@ async function initDB() {
       ts BIGINT,
       created_at TIMESTAMP DEFAULT NOW()
     );
+    CREATE TABLE IF NOT EXISTS pwa_plans (
+      object_id TEXT PRIMARY KEY,
+      image TEXT DEFAULT '',
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
     ALTER TABLE pwa_objects ADD COLUMN IF NOT EXISTS assigned_to TEXT DEFAULT '';
     ALTER TABLE pwa_team    ADD COLUMN IF NOT EXISTS login_code TEXT;
     ALTER TABLE pwa_entries ADD COLUMN IF NOT EXISTS user_name TEXT;
@@ -178,6 +183,7 @@ app.get('/api/sync', auth, async (req, res) => {
   try {
     const eng = isEngineer(req.user);
     const allObjects = (await pool.query('SELECT * FROM pwa_objects ORDER BY created_at DESC')).rows;
+    const planIds = new Set((await pool.query('SELECT object_id FROM pwa_plans')).rows.map(r => r.object_id));
 
     // Инженер видит все объекты, монтажник — только назначенные ему
     const objects = eng
@@ -212,7 +218,7 @@ app.get('/api/sync', auth, async (req, res) => {
     const normObj = objects.map(o => ({
       id: o.id, name: o.name, address: o.address, customer: o.customer,
       status: o.status, planCable: o.plan_cable, planDevices: o.plan_devices,
-      assignedTo: safeArr(o.assigned_to), ts: o.created_at
+      assignedTo: safeArr(o.assigned_to), hasPlan: planIds.has(o.id), ts: o.created_at
     }));
     const normTeam = team.map(t => ({ id: t.id, name: t.name, role: t.role, code: t.login_code || '' }));
     const normEnt = entries.map(e => ({
@@ -390,6 +396,54 @@ app.post('/api/shleyfy/delete', auth, async (req, res) => {
     if (!isEngineer(req.user)) return res.status(403).json({ error: 'forbidden' });
     await pool.query('DELETE FROM pwa_shleyf_log WHERE shleyf_id=$1', [req.body.id]);
     await pool.query('DELETE FROM pwa_shleyfy WHERE id=$1', [req.body.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── План объекта (картинка) ─────────────────────────────────────────────────
+// Сохранить план — только инженер
+app.post('/api/plan/save', auth, async (req, res) => {
+  try {
+    if (!isEngineer(req.user)) return res.status(403).json({ error: 'forbidden' });
+    const { objectId, image } = req.body;
+    if (!objectId || !image) return res.status(400).json({ error: 'no data' });
+    await pool.query(
+      `INSERT INTO pwa_plans (object_id, image, updated_at) VALUES ($1,$2,NOW())
+       ON CONFLICT (object_id) DO UPDATE SET image=$2, updated_at=NOW()`,
+      [objectId, image]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Получить план — инженер или назначенный на объект монтажник
+app.get('/api/plan/:objectId', auth, async (req, res) => {
+  try {
+    const objectId = req.params.objectId;
+    if (!isEngineer(req.user)) {
+      const o = await pool.query('SELECT assigned_to FROM pwa_objects WHERE id=$1', [objectId]);
+      const allowed = o.rows[0] && safeArr(o.rows[0].assigned_to).includes(req.user.teamId);
+      if (!allowed) return res.status(403).json({ error: 'forbidden' });
+    }
+    const { rows } = await pool.query('SELECT image FROM pwa_plans WHERE object_id=$1', [objectId]);
+    res.json({ objectId, image: rows[0] ? rows[0].image : '' });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Удалить план — только инженер
+app.post('/api/plan/delete', auth, async (req, res) => {
+  try {
+    if (!isEngineer(req.user)) return res.status(403).json({ error: 'forbidden' });
+    await pool.query('DELETE FROM pwa_plans WHERE object_id=$1', [req.body.objectId]);
     res.json({ ok: true });
   } catch (e) {
     console.error(e);
