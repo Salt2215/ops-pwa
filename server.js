@@ -128,9 +128,21 @@ async function initDB() {
       image TEXT DEFAULT '',
       updated_at TIMESTAMP DEFAULT NOW()
     );
+    CREATE TABLE IF NOT EXISTS pwa_segments (
+      id TEXT PRIMARY KEY,
+      object_id TEXT,
+      x1 REAL, y1 REAL, x2 REAL, y2 REAL,
+      status TEXT DEFAULT 'done',
+      note TEXT DEFAULT '',
+      author_name TEXT,
+      ts BIGINT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
     ALTER TABLE pwa_objects ADD COLUMN IF NOT EXISTS assigned_to TEXT DEFAULT '';
     ALTER TABLE pwa_team    ADD COLUMN IF NOT EXISTS login_code TEXT;
     ALTER TABLE pwa_entries ADD COLUMN IF NOT EXISTS user_name TEXT;
+    ALTER TABLE pwa_shleyfy ADD COLUMN IF NOT EXISTS pin_x REAL;
+    ALTER TABLE pwa_shleyfy ADD COLUMN IF NOT EXISTS pin_y REAL;
   `);
   console.log('DB initialized');
 }
@@ -215,6 +227,10 @@ app.get('/api/sync', auth, async (req, res) => {
       ? (await pool.query(`SELECT * FROM pwa_shleyf_log WHERE shleyf_id = ANY($1) ORDER BY ts ASC`, [shIds])).rows
       : [];
 
+    const segRows = objIds.length > 0
+      ? (await pool.query(`SELECT * FROM pwa_segments WHERE object_id = ANY($1) ORDER BY created_at ASC`, [objIds])).rows
+      : [];
+
     const normObj = objects.map(o => ({
       id: o.id, name: o.name, address: o.address, customer: o.customer,
       status: o.status, planCable: o.plan_cable, planDevices: o.plan_devices,
@@ -235,14 +251,20 @@ app.get('/api/sync', auth, async (req, res) => {
       id: s.id, objectId: s.object_id, name: s.name, system: s.system,
       planCable: s.plan_cable, planDevices: s.plan_devices,
       doneCable: s.done_cable, doneDevices: s.done_devices,
-      status: s.status, assignedTo: s.assigned_to || '', ts: s.created_at
+      status: s.status, assignedTo: s.assigned_to || '',
+      pinX: s.pin_x, pinY: s.pin_y, ts: s.created_at
     }));
     const normLog = logRows.map(l => ({
       id: l.id, shleyfId: l.shleyf_id, author: l.author_name,
       text: l.text, isProblem: l.is_problem, ts: l.ts
     }));
+    const normSeg = segRows.map(s => ({
+      id: s.id, objectId: s.object_id,
+      x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2,
+      status: s.status, note: s.note || '', author: s.author_name || '', ts: s.ts
+    }));
 
-    res.json({ objects: normObj, team: normTeam, entries: normEnt, projects: normProj, shleyfy: normSh, shleyfLog: normLog });
+    res.json({ objects: normObj, team: normTeam, entries: normEnt, projects: normProj, shleyfy: normSh, shleyfLog: normLog, segments: normSeg });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: e.message });
@@ -331,10 +353,11 @@ app.post('/api/shleyfy/sync', auth, async (req, res) => {
     const list = req.body.shleyfy || [];
     for (const s of list) {
       await pool.query(
-        `INSERT INTO pwa_shleyfy (id,object_id,name,system,plan_cable,plan_devices,assigned_to,owner_uid)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-         ON CONFLICT (id) DO UPDATE SET object_id=$2,name=$3,system=$4,plan_cable=$5,plan_devices=$6,assigned_to=$7`,
-        [s.id, s.objectId, s.name || '', s.system || '', s.planCable || 0, s.planDevices || 0, s.assignedTo || '', req.user.uid]
+        `INSERT INTO pwa_shleyfy (id,object_id,name,system,plan_cable,plan_devices,assigned_to,pin_x,pin_y,owner_uid)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         ON CONFLICT (id) DO UPDATE SET object_id=$2,name=$3,system=$4,plan_cable=$5,plan_devices=$6,assigned_to=$7,pin_x=$8,pin_y=$9`,
+        [s.id, s.objectId, s.name || '', s.system || '', s.planCable || 0, s.planDevices || 0, s.assignedTo || '',
+         (typeof s.pinX === 'number' ? s.pinX : null), (typeof s.pinY === 'number' ? s.pinY : null), req.user.uid]
       );
     }
     res.json({ ok: true });
@@ -444,6 +467,48 @@ app.post('/api/plan/delete', auth, async (req, res) => {
   try {
     if (!isEngineer(req.user)) return res.status(403).json({ error: 'forbidden' });
     await pool.query('DELETE FROM pwa_plans WHERE object_id=$1', [req.body.objectId]);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Участки на плане (рисует инженер или назначенный монтажник) ──────────────
+app.post('/api/segments/save', auth, async (req, res) => {
+  try {
+    const { id, objectId, x1, y1, x2, y2, status, note, ts } = req.body;
+    if (!id || !objectId) return res.status(400).json({ error: 'no data' });
+    if (!isEngineer(req.user)) {
+      const o = await pool.query('SELECT assigned_to FROM pwa_objects WHERE id=$1', [objectId]);
+      const allowed = o.rows[0] && safeArr(o.rows[0].assigned_to).includes(req.user.teamId);
+      if (!allowed) return res.status(403).json({ error: 'Объект вам не назначен' });
+    }
+    const st = ['done', 'wip', 'problem'].includes(status) ? status : 'done';
+    await pool.query(
+      `INSERT INTO pwa_segments (id,object_id,x1,y1,x2,y2,status,note,author_name,ts)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       ON CONFLICT (id) DO UPDATE SET x1=$3,y1=$4,x2=$5,y2=$6,status=$7,note=$8`,
+      [id, objectId, x1, y1, x2, y2, st, note || '', req.user.name, ts || Date.now()]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/segments/delete', auth, async (req, res) => {
+  try {
+    const { id } = req.body;
+    const r = await pool.query('SELECT object_id FROM pwa_segments WHERE id=$1', [id]);
+    if (!r.rows[0]) return res.json({ ok: true });
+    if (!isEngineer(req.user)) {
+      const o = await pool.query('SELECT assigned_to FROM pwa_objects WHERE id=$1', [r.rows[0].object_id]);
+      const allowed = o.rows[0] && safeArr(o.rows[0].assigned_to).includes(req.user.teamId);
+      if (!allowed) return res.status(403).json({ error: 'forbidden' });
+    }
+    await pool.query('DELETE FROM pwa_segments WHERE id=$1', [id]);
     res.json({ ok: true });
   } catch (e) {
     console.error(e);
