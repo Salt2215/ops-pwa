@@ -1,4 +1,4 @@
-const CACHE = 'ops-pwa-v12';
+const CACHE = 'ops-pwa-v13';
 const ASSETS = ['/', '/index.html', '/manifest.json'];
 
 self.addEventListener('install', e => {
