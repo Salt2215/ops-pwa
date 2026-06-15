@@ -443,10 +443,11 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   <div id="planViewerContent" style="position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;z-index:1"></div>
 </div>
 
-<input type="file" id="planFileInput" accept="image/*" style="display:none" onchange="handlePlanFile(event)">
+<input type="file" id="planFileInput" accept="image/*,application/pdf,.pdf" style="display:none" onchange="handlePlanFile(event)">
 
 <div class="toast" id="toast"></div>
 
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.min.js"></script>
 <script>
 // ─── Config & State ───
 const API_URL = window.location.origin;
@@ -1562,7 +1563,7 @@ function deleteSegment(id) {
 }
 function planEmptyHtml(objId, eng) {
   return eng
-    ? `<button class="btn btn-secondary btn-sm" onclick="triggerPlanUpload('${objId}')">📷 Загрузить план</button>`
+    ? `<button class="btn btn-secondary btn-sm" onclick="triggerPlanUpload('${objId}')">📄 Загрузить план (PDF или фото)</button>`
     : `<div style="font-size:13px;color:var(--text3)">План пока не загружен.</div>`;
 }
 function triggerPlanUpload(objId) {
@@ -1577,6 +1578,9 @@ function handlePlanFile(ev) {
   const file = ev.target.files && ev.target.files[0];
   if (!file) return;
   const objId = currentPlanObjId;
+  const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '');
+  if (isPdf) { renderPdfPlan(file, objId); return; }
+  // Картинка (jpg/png/...) — как раньше: сжать до 2400px
   const reader = new FileReader();
   reader.onload = () => {
     const img = new Image();
@@ -1586,25 +1590,63 @@ function handlePlanFile(ev) {
       const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
       const canvas = document.createElement('canvas');
       canvas.width = w; canvas.height = h;
-      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
-      planCache[objId] = dataUrl;
-      const obj = state.objects.find(o => o.id === objId);
-      if (obj) obj.hasPlan = true;
-      saveLocal();
-      renderPlanBox(objId);
-      showToast('Загрузка плана…');
-      fetch(`${API_URL}/api/plan/save`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
-        body: JSON.stringify({ objectId: objId, image: dataUrl }),
-      })
-        .then(r => r.ok ? showToast('✅ План загружен') : showToast('Не удалось загрузить план'))
-        .catch(() => showToast('Не удалось загрузить план'));
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
+      savePlanDataUrl(objId, canvas.toDataURL('image/jpeg', 0.82));
     };
     img.src = reader.result;
   };
   reader.readAsDataURL(file);
+}
+
+// Рендер первой страницы PDF в чёткую картинку (высокое разрешение под зум)
+function renderPdfPlan(file, objId) {
+  if (!window.pdfjsLib) { showToast('PDF-движок не загрузился — нужен интернет, обновите страницу'); return; }
+  showToast('Обработка PDF…');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js';
+  const reader = new FileReader();
+  reader.onload = () => {
+    const buf = new Uint8Array(reader.result);
+    pdfjsLib.getDocument({ data: buf }).promise
+      .then(pdf => pdf.getPage(1))
+      .then(page => {
+        const base = page.getViewport({ scale: 1 });
+        const TARGET_W = 3000;                       // высокое разрешение под зум до 600%
+        let scale = TARGET_W / base.width;
+        const longest = Math.max(base.width, base.height) * scale;
+        if (longest > 4000) scale *= 4000 / longest; // защита памяти на больших листах
+        const vp = page.getViewport({ scale });
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(vp.width);
+        canvas.height = Math.round(vp.height);
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        return page.render({ canvasContext: ctx, viewport: vp }).promise.then(() => canvas);
+      })
+      .then(canvas => savePlanDataUrl(objId, canvas.toDataURL('image/jpeg', 0.85)))
+      .catch(err => { console.error('pdf render:', err); showToast('Не удалось открыть PDF'); });
+  };
+  reader.onerror = () => showToast('Не удалось прочитать файл');
+  reader.readAsArrayBuffer(file);
+}
+
+// Общее сохранение плана (и для картинки, и для отрендеренного PDF)
+function savePlanDataUrl(objId, dataUrl) {
+  planCache[objId] = dataUrl;
+  const obj = state.objects.find(o => o.id === objId);
+  if (obj) obj.hasPlan = true;
+  saveLocal();
+  renderPlanBox(objId);
+  showToast('Загрузка плана…');
+  fetch(`${API_URL}/api/plan/save`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
+    body: JSON.stringify({ objectId: objId, image: dataUrl }),
+  })
+    .then(r => r.ok ? showToast('✅ План загружен') : showToast('Слишком большой файл или ошибка сети'))
+    .catch(() => showToast('Не удалось загрузить план'));
 }
 function deletePlan(objId) {
   if (!isEngineer()) return;
