@@ -470,6 +470,7 @@ let state = {
   shleyfLog: JSON.parse(localStorage.getItem('ops_shleyflog') || '[]'),
   planSegments: JSON.parse(localStorage.getItem('ops_segments') || '[]'),
   devices: JSON.parse(localStorage.getItem('ops_devices') || '[]'),
+  drawings: JSON.parse(localStorage.getItem('ops_drawings') || '[]'),
   messages: JSON.parse(localStorage.getItem('ops_messages') || '[]'),
   pendingMsgs: [],
   currentScreen: 'home',
@@ -1139,6 +1140,15 @@ const SHLEYF_COLORS = { todo:'var(--text3)', wip:'var(--yellow)', done:'var(--gr
 let addShleyfObjId = null;
 let editingShleyfId = null;
 let planCache = {};
+let activeDrawing = {}; // objId -> drawingId
+function drawingsForObject(objId) { return state.drawings.filter(d => d.objectId === objId).sort((a,b)=>(a.ts||0)-(b.ts||0)); }
+function activeDid(objId) {
+  const list = drawingsForObject(objId);
+  if (!list.length) return null;
+  if (activeDrawing[objId] && list.some(d => d.id === activeDrawing[objId])) return activeDrawing[objId];
+  return list[0].id;
+}
+function drawingName(did) { const d = state.drawings.find(x => x.id === did); return d ? d.name : 'Чертёж'; }
 let currentPlanObjId = null;
 let placingShleyfId = null;
 let drawingSegObjId = null;
@@ -1349,26 +1359,82 @@ function addShleyfLog(id) {
 }
 
 // ─── План объекта (картинка) ───
+function drawingTabsHtml(objId) {
+  const eng = isEngineer();
+  const list = drawingsForObject(objId);
+  const active = activeDid(objId);
+  if (!list.length && !eng) return '';
+  const tabs = list.map(d => {
+    const on = d.id === active;
+    return `<button onclick="setActiveDrawing('${objId}','${d.id}')" style="flex-shrink:0;padding:6px 10px;border-radius:8px;border:1px solid var(--border);font-size:13px;cursor:pointer;${on?'background:var(--accent);color:#fff;border-color:var(--accent);font-weight:600':'background:var(--bg2);color:var(--text2)'}">${d.name}</button>`;
+  }).join('');
+  const add = eng ? `<button onclick="addDrawing('${objId}')" style="flex-shrink:0;padding:6px 10px;border-radius:8px;border:1px dashed var(--border);font-size:13px;cursor:pointer;background:transparent;color:var(--text2)">＋ Чертёж</button>` : '';
+  return `<div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;margin-bottom:8px">${tabs}${add}</div>`;
+}
 function renderPlanBox(objId) {
   const box = document.getElementById('planBox');
   if (!box) return;
-  const obj = state.objects.find(o => o.id === objId);
   const eng = isEngineer();
-  if (planCache[objId]) { box.innerHTML = planImgHtml(objId, eng); return; }
-  if (obj && obj.hasPlan && state.isOnline && state.user?.token) {
-    box.innerHTML = '<div style="font-size:13px;color:var(--text3)">Загрузка плана…</div>';
-    fetch(`${API_URL}/api/plan/${objId}`, { headers: { 'Authorization': `Bearer ${state.user.token}` } })
+  const did = activeDid(objId);
+  const tabs = drawingTabsHtml(objId);
+  // нет ни одного чертежа
+  if (!did) { box.innerHTML = tabs + planEmptyHtml(objId, eng); return; }
+  // картинка активного чертежа уже в памяти
+  if (planCache[did]) { box.innerHTML = tabs + '<div id="planSlot">' + planImgHtml(objId, eng) + '</div>'; return; }
+  // подгружаем картинку активного чертежа
+  if (state.isOnline && state.user?.token) {
+    box.innerHTML = tabs + '<div id="planSlot"><div style="font-size:13px;color:var(--text3)">Загрузка чертежа…</div></div>';
+    fetch(`${API_URL}/api/drawing/${did}`, { headers: { 'Authorization': `Bearer ${state.user.token}` } })
       .then(r => r.json())
       .then(d => {
-        const b = document.getElementById('planBox');
-        if (!b) return;
-        if (d.image) { planCache[objId] = d.image; b.innerHTML = planImgHtml(objId, eng); }
-        else b.innerHTML = planEmptyHtml(objId, eng);
+        const slot = document.getElementById('planSlot');
+        if (!slot) return;
+        if (d.image) { planCache[did] = d.image; slot.innerHTML = planImgHtml(objId, eng); }
+        else slot.innerHTML = planEmptyHtml(objId, eng);
       })
-      .catch(() => { const b = document.getElementById('planBox'); if (b) b.innerHTML = planEmptyHtml(objId, eng); });
+      .catch(() => { const slot = document.getElementById('planSlot'); if (slot) slot.innerHTML = planEmptyHtml(objId, eng); });
     return;
   }
-  box.innerHTML = planEmptyHtml(objId, eng);
+  box.innerHTML = tabs + '<div id="planSlot"><div style="font-size:13px;color:var(--text3)">Чертёж недоступен офлайн.</div></div>';
+}
+function setActiveDrawing(objId, did) {
+  activeDrawing[objId] = did;
+  drawingSegObjId = null; segPoints = []; placingShleyfId = null; placingDeviceShleyfId = null;
+  renderPlanBox(objId);
+}
+function addDrawing(objId) {
+  if (!isEngineer()) return;
+  if (!state.isOnline || !state.user?.token) { showToast('Добавить чертёж — только онлайн'); return; }
+  const n = drawingsForObject(objId).length + 1;
+  const name = (prompt('Название чертежа:', 'Чертёж ' + n) || '').trim() || ('Чертёж ' + n);
+  const did = 'dr' + Date.now();
+  state.drawings.push({ id: did, objectId: objId, name, ts: Date.now() });
+  saveLocal();
+  fetch(`${API_URL}/api/drawings/save`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
+    body: JSON.stringify({ id: did, objectId: objId, name, ts: Date.now() }),
+  }).catch(() => {});
+  activeDrawing[objId] = did;
+  renderPlanBox(objId);
+  triggerPlanUpload(objId); // сразу предложим выбрать файл для нового чертежа
+}
+function renameDrawing(objId) {
+  if (!isEngineer()) return;
+  const did = activeDid(objId);
+  if (!did) return;
+  const cur = drawingName(did);
+  const name = (prompt('Название чертежа:', cur) || '').trim();
+  if (!name || name === cur) return;
+  const d = state.drawings.find(x => x.id === did);
+  if (d) d.name = name;
+  saveLocal();
+  fetch(`${API_URL}/api/drawings/save`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
+    body: JSON.stringify({ id: did, objectId: objId, name }),
+  }).catch(() => {});
+  renderPlanBox(objId);
 }
 // точки участка: либо массив points (кривая), либо две точки из x1y1/x2y2 (старые прямые)
 function segPts(s) {
@@ -1418,13 +1484,15 @@ function segOverlaySvg(objId) {
   return `<svg viewBox="0 0 100 100" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none">${lines}${temp}</svg>`;
 }
 function pinsOverlayHtml(objId, drawing) {
-  return shleyfyForObject(objId).filter(s => typeof s.pinX === 'number' && typeof s.pinY === 'number').map(s => {
+  const did = activeDid(objId);
+  return shleyfyForObject(objId).filter(s => typeof s.pinX === 'number' && typeof s.pinY === 'number' && (s.pinDrawingId || objId) === did).map(s => {
     const col = SHLEYF_COLORS[s.status] || SHLEYF_COLORS.todo;
     return `<div onclick="event.stopPropagation();showShleyfDetail('${s.id}')" title="${s.name}"
       style="position:absolute;left:${s.pinX}%;top:${s.pinY}%;transform:translate(-50%,-50%);width:20px;height:20px;border-radius:50%;background:${col};border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.6);cursor:pointer;pointer-events:${drawing ? 'none' : 'auto'}"></div>`;
   }).join('');
 }
 function planImgHtml(objId, eng) {
+  const did = activeDid(objId);
   const placing = placingShleyfId && state.shleyfy.find(z => z.id === placingShleyfId)?.objectId === objId;
   const drawing = drawingSegObjId === objId;
   const placingDevSh = placingDeviceShleyfId && state.shleyfy.find(z => z.id === placingDeviceShleyfId)?.objectId === objId
@@ -1438,7 +1506,7 @@ function planImgHtml(objId, eng) {
       <a onclick="undoSegPoint('${objId}')" style="color:var(--text2);text-decoration:underline;cursor:pointer">⌫ убрать точку</a> · 
       <a onclick="stopDrawingSeg('${objId}')" style="color:var(--text2);text-decoration:underline;cursor:pointer">выйти</a></div>` : ''}
     <div style="position:relative;line-height:0">
-      <img src="${planCache[objId]}" onclick="planClick(event,'${objId}')"
+      <img src="${planCache[did]}" onclick="planClick(event,'${objId}')"
         style="width:100%;border-radius:8px;border:1px solid var(--border);display:block;cursor:${lock ? 'crosshair' : 'default'}">
       ${segOverlaySvg(objId)}
       ${pinsOverlayHtml(objId, lock)}
@@ -1447,8 +1515,9 @@ function planImgHtml(objId, eng) {
     <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
       <button class="btn btn-secondary btn-sm" onclick="openPlanViewer('${objId}')">⛶ На весь экран</button>
       <button class="btn btn-secondary btn-sm" onclick="startDrawingSeg('${objId}')">✏️ Рисовать участки</button>
-      ${eng ? `<button class="btn btn-secondary btn-sm" onclick="triggerPlanUpload('${objId}')">Заменить план</button>
-      <button class="btn btn-danger btn-sm" onclick="deletePlan('${objId}')">Удалить план</button>` : ''}
+      ${eng ? `<button class="btn btn-secondary btn-sm" onclick="triggerPlanUpload('${objId}')">Заменить картинку</button>
+      <button class="btn btn-secondary btn-sm" onclick="renameDrawing('${objId}')">✎ Имя</button>
+      <button class="btn btn-danger btn-sm" onclick="deletePlan('${objId}')">Удалить чертёж</button>` : ''}
     </div>`;
 }
 function planClick(ev, objId) {
@@ -1459,7 +1528,7 @@ function planClick(ev, objId) {
   // 1) постановка метки шлейфа
   if (placingShleyfId) {
     const s = state.shleyfy.find(z => z.id === placingShleyfId);
-    if (s) { s.pinX = x; s.pinY = y; saveLocal(); syncShleyfy(); }
+    if (s) { s.pinX = x; s.pinY = y; s.pinDrawingId = activeDid(objId); saveLocal(); syncShleyfy(); }
     placingShleyfId = null;
     refreshPlan(objId);
     showToast('📍 Метка поставлена');
@@ -1501,7 +1570,7 @@ function planClick(ev, objId) {
 }
 // ─── План на весь экран (зум + прокрутка) ───
 function openPlanViewer(objId) {
-  if (!planCache[objId]) { showToast('Сначала откройте/загрузите план'); return; }
+  if (!planCache[activeDid(objId)]) { showToast('Сначала откройте/загрузите чертёж'); return; }
   planCtx = 'viewer'; viewerZoom = 1; currentViewerObj = objId;
   showModal('planViewerModal');
   renderPlanViewer(objId);
@@ -1535,7 +1604,7 @@ function renderPlanViewer(objId) {
     ${drawing ? `<div style="padding:6px 12px;background:var(--bg2);color:#e8841a;font-size:13px;text-align:center;flex-shrink:0">Тапайте точки линии по очереди (точек: ${segPoints.length}), затем «✓ Завершить»</div>` : ''}
     <div style="flex:1;overflow:auto;background:var(--bg);-webkit-overflow-scrolling:touch">
       <div style="position:relative;width:${viewerZoom*100}%;line-height:0">
-        <img src="${planCache[objId]}" onclick="planClick(event,'${objId}')" style="width:100%;display:block;cursor:${drawing?'crosshair':'default'}">
+        <img src="${planCache[activeDid(objId)]}" onclick="planClick(event,'${objId}')" style="width:100%;display:block;cursor:${drawing?'crosshair':'default'}">
         ${segOverlaySvg(objId)}
         ${pinsOverlayHtml(objId, drawing)}
         ${devicesOverlayHtml(objId, drawing)}
@@ -1549,8 +1618,7 @@ function cancelPlacing(objId) {
 function startPlacing(id) {
   const s = state.shleyfy.find(x => x.id === id);
   if (!s || !isEngineer()) return;
-  const obj = state.objects.find(o => o.id === s.objectId);
-  if (!planCache[s.objectId] && !(obj && obj.hasPlan)) { showToast('Сначала загрузите план объекта'); return; }
+  if (!activeDid(s.objectId)) { showToast('Сначала добавьте чертёж объекта'); return; }
   placingShleyfId = id;
   closeModal('shleyfDetailModal');
   showObjectDetail(s.objectId);
@@ -1558,7 +1626,7 @@ function startPlacing(id) {
 }
 
 // ─── Участки на плане (рисование двумя тапами) ───
-function segmentsForObject(objId) { return state.planSegments.filter(s => s.objectId === objId); }
+function segmentsForObject(objId) { const did = activeDid(objId); return state.planSegments.filter(s => s.objectId === objId && (s.drawingId || s.objectId) === did); }
 function pointDistToSeg(px, py, x1, y1, x2, y2) {
   const dx = x2 - x1, dy = y2 - y1;
   const len2 = dx * dx + dy * dy;
@@ -1581,7 +1649,7 @@ function finishSegLine(objId) {
   if (segPoints.length < 2) { showToast('Нужно минимум 2 точки'); return; }
   const pts = segPoints.slice();
   const seg = {
-    id: 'seg' + Date.now(), objectId: objId,
+    id: 'seg' + Date.now(), objectId: objId, drawingId: activeDid(objId),
     points: pts,
     x1: pts[0].x, y1: pts[0].y, x2: pts[pts.length - 1].x, y2: pts[pts.length - 1].y,
     status: 'done', note: '', author: myName(), ts: Date.now()
@@ -1602,7 +1670,7 @@ function pushSegment(seg) {
   fetch(`${API_URL}/api/segments/save`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
-    body: JSON.stringify({ id: seg.id, objectId: seg.objectId, points: seg.points || null, x1: seg.x1, y1: seg.y1, x2: seg.x2, y2: seg.y2, status: seg.status, note: seg.note || '', ts: seg.ts }),
+    body: JSON.stringify({ id: seg.id, objectId: seg.objectId, drawingId: seg.drawingId || null, points: seg.points || null, x1: seg.x1, y1: seg.y1, x2: seg.x2, y2: seg.y2, status: seg.status, note: seg.note || '', ts: seg.ts }),
   }).catch(() => {});
 }
 function openSegment(id) {
@@ -1659,7 +1727,7 @@ function deleteSegment(id) {
 }
 
 // ─── Приборы шлейфа на плане ───
-function devicesForObject(objId) { return state.devices.filter(d => d.objectId === objId); }
+function devicesForObject(objId) { const did = activeDid(objId); return state.devices.filter(d => d.objectId === objId && (d.drawingId || d.objectId) === did); }
 function devicesForShleyf(shId) { return state.devices.filter(d => d.shleyfId === shId).sort((a,b)=>(a.num||0)-(b.num||0)); }
 function devicesOverlayHtml(objId, lock) {
   return devicesForObject(objId).map(d => {
@@ -1672,8 +1740,7 @@ function startPlacingDevice(shId) {
   if (!state.isOnline || !state.user?.token) { showToast('Ставить приборы — только онлайн'); return; }
   const sh = state.shleyfy.find(x => x.id === shId);
   if (!sh) return;
-  const obj = state.objects.find(o => o.id === sh.objectId);
-  if (!planCache[sh.objectId] && !(obj && obj.hasPlan)) { showToast('Сначала загрузите план объекта'); return; }
+  if (!activeDid(sh.objectId)) { showToast('Сначала добавьте чертёж объекта'); return; }
   placingDeviceShleyfId = shId; placingShleyfId = null; drawingSegObjId = null;
   closeModal('shleyfDetailModal');
   showObjectDetail(sh.objectId);
@@ -1682,7 +1749,7 @@ function startPlacingDevice(shId) {
 function addDeviceAt(sh, x, y) {
   const nums = devicesForShleyf(sh.id).map(d => d.num || 0);
   const num = (nums.length ? Math.max.apply(null, nums) : 0) + 1;
-  const dev = { id: 'dev' + Date.now() + Math.floor(Math.random()*1000), objectId: sh.objectId, shleyfId: sh.id, num, x: +x.toFixed(2), y: +y.toFixed(2), status: 'todo', note: '', author: myName(), ts: Date.now() };
+  const dev = { id: 'dev' + Date.now() + Math.floor(Math.random()*1000), objectId: sh.objectId, shleyfId: sh.id, drawingId: activeDid(sh.objectId), num, x: +x.toFixed(2), y: +y.toFixed(2), status: 'todo', note: '', author: myName(), ts: Date.now() };
   state.devices.push(dev);
   saveLocal(); pushDevice(dev);
 }
@@ -1691,7 +1758,7 @@ function pushDevice(d) {
   fetch(`${API_URL}/api/devices/save`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
-    body: JSON.stringify({ id: d.id, objectId: d.objectId, shleyfId: d.shleyfId, num: d.num, x: d.x, y: d.y, status: d.status, note: d.note || '', ts: d.ts }),
+    body: JSON.stringify({ id: d.id, objectId: d.objectId, shleyfId: d.shleyfId, drawingId: d.drawingId || null, num: d.num, x: d.x, y: d.y, status: d.status, note: d.note || '', ts: d.ts }),
   }).catch(() => {});
 }
 function openDevice(id) {
@@ -1747,8 +1814,8 @@ function deleteDevice(id) {
 }
 function planEmptyHtml(objId, eng) {
   return eng
-    ? `<button class="btn btn-secondary btn-sm" onclick="triggerPlanUpload('${objId}')">📄 Загрузить план (PDF или фото)</button>`
-    : `<div style="font-size:13px;color:var(--text3)">План пока не загружен.</div>`;
+    ? `<button class="btn btn-secondary btn-sm" onclick="addDrawing('${objId}')">📄 Добавить чертёж (PDF или фото)</button>`
+    : `<div style="font-size:13px;color:var(--text3)">Чертёж пока не загружен.</div>`;
 }
 function triggerPlanUpload(objId) {
   if (!isEngineer()) return;
@@ -1816,38 +1883,46 @@ function renderPdfPlan(file, objId) {
   reader.readAsArrayBuffer(file);
 }
 
-// Общее сохранение плана (и для картинки, и для отрендеренного PDF)
+// Сохранение картинки в активный чертёж (картинка или отрендеренный PDF)
 function savePlanDataUrl(objId, dataUrl) {
-  planCache[objId] = dataUrl;
+  const did = activeDid(objId);
+  if (!did) { showToast('Сначала добавьте чертёж'); return; }
+  planCache[did] = dataUrl;
   const obj = state.objects.find(o => o.id === objId);
   if (obj) obj.hasPlan = true;
   saveLocal();
   renderPlanBox(objId);
-  showToast('Загрузка плана…');
-  fetch(`${API_URL}/api/plan/save`, {
+  showToast('Загрузка чертежа…');
+  fetch(`${API_URL}/api/drawings/save`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
-    body: JSON.stringify({ objectId: objId, image: dataUrl }),
+    body: JSON.stringify({ id: did, objectId: objId, name: drawingName(did), image: dataUrl }),
   })
-    .then(r => r.ok ? showToast('✅ План загружен') : showToast('Слишком большой файл или ошибка сети'))
-    .catch(() => showToast('Не удалось загрузить план'));
+    .then(r => r.ok ? showToast('✅ Чертёж загружен') : showToast('Слишком большой файл или ошибка сети'))
+    .catch(() => showToast('Не удалось загрузить чертёж'));
 }
 function deletePlan(objId) {
   if (!isEngineer()) return;
-  if (!confirm('Удалить план объекта?')) return;
-  delete planCache[objId];
-  const obj = state.objects.find(o => o.id === objId);
-  if (obj) obj.hasPlan = false;
+  const did = activeDid(objId);
+  if (!did) return;
+  if (!confirm('Удалить чертёж «' + drawingName(did) + '» со всей его разметкой?')) return;
+  // убираем локально: чертёж, его картинку, линии и приборы на нём
+  state.drawings = state.drawings.filter(d => d.id !== did);
+  state.planSegments = state.planSegments.filter(s => (s.drawingId || s.objectId) !== did);
+  state.devices = state.devices.filter(d => (d.drawingId || d.objectId) !== did);
+  delete planCache[did];
+  delete activeDrawing[objId];
+  if (!drawingsForObject(objId).length) { const obj = state.objects.find(o => o.id === objId); if (obj) obj.hasPlan = false; }
   saveLocal();
   if (state.isOnline && state.user?.token) {
-    fetch(`${API_URL}/api/plan/delete`, {
+    fetch(`${API_URL}/api/drawings/delete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
-      body: JSON.stringify({ objectId: objId }),
+      body: JSON.stringify({ id: did }),
     }).catch(() => {});
   }
   renderPlanBox(objId);
-  showToast('План удалён');
+  showToast('Чертёж удалён');
 }
 
 // ─── Projects screen ───
@@ -2038,6 +2113,7 @@ async function syncAll(silent = false) {
       if (Array.isArray(data.shleyfLog)) state.shleyfLog = data.shleyfLog;
       if (Array.isArray(data.segments)) state.planSegments = data.segments;
       if (Array.isArray(data.devices)) state.devices = data.devices;
+      if (Array.isArray(data.drawings)) state.drawings = data.drawings;
       if (Array.isArray(data.entries)) {
         const ids = new Set(state.entries.map(e => e.id));
         data.entries.forEach(e => { if (!ids.has(e.id)) state.entries.push(e); });
@@ -2063,6 +2139,7 @@ function saveLocal() {
   localStorage.setItem('ops_shleyflog', JSON.stringify(state.shleyfLog));
   localStorage.setItem('ops_segments', JSON.stringify(state.planSegments));
   localStorage.setItem('ops_devices', JSON.stringify(state.devices));
+  localStorage.setItem('ops_drawings', JSON.stringify(state.drawings));
   localStorage.setItem('ops_messages', JSON.stringify(state.messages));
   localStorage.setItem('ops_user',    JSON.stringify(state.user));
 }
