@@ -438,6 +438,14 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   </div>
 </div>
 
+<div class="modal-overlay" id="deviceDetailModal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div id="deviceDetailContent"></div>
+    <button class="btn btn-secondary" onclick="closeModal('deviceDetailModal')" style="margin-top:10px">Закрыть</button>
+  </div>
+</div>
+
 <!-- Fullscreen Plan Viewer -->
 <div class="modal-overlay" id="planViewerModal">
   <div id="planViewerContent" style="position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;z-index:1"></div>
@@ -461,6 +469,7 @@ let state = {
   shleyfy: JSON.parse(localStorage.getItem('ops_shleyfy') || '[]'),
   shleyfLog: JSON.parse(localStorage.getItem('ops_shleyflog') || '[]'),
   planSegments: JSON.parse(localStorage.getItem('ops_segments') || '[]'),
+  devices: JSON.parse(localStorage.getItem('ops_devices') || '[]'),
   messages: JSON.parse(localStorage.getItem('ops_messages') || '[]'),
   pendingMsgs: [],
   currentScreen: 'home',
@@ -1136,6 +1145,9 @@ let drawingSegObjId = null;
 let segPoints = [];
 const SEG_COLORS = { done:'var(--green)', wip:'#e8841a', problem:'var(--red)' };
 const SEG_STATUS = { done:'Проложено', wip:'В работе', problem:'Проблема' };
+const DEV_COLORS = { todo:'#9aa0a6', done:'var(--green)', problem:'var(--red)' };
+const DEV_STATUS = { todo:'Не поставлен', done:'Поставлен', problem:'Проблема' };
+let placingDeviceShleyfId = null;
 let planCtx = 'box';
 let viewerZoom = 1;
 let currentViewerObj = null;
@@ -1246,6 +1258,7 @@ function showShleyfDetail(id) {
     <div style="font-size:13px;color:var(--text3);margin-bottom:14px">${s.system||''}</div>
 
     ${isEngineer() ? `<button class="btn btn-secondary btn-sm" style="margin-bottom:14px" onclick="startPlacing('${id}')">📍 ${typeof s.pinX === 'number' ? 'Передвинуть метку на плане' : 'Поставить на план'}</button>` : ''}
+    <button class="btn btn-secondary btn-sm" style="margin-bottom:14px" onclick="startPlacingDevice('${id}')">🔘 Приборы шлейфа на плане (${devicesForShleyf(id).length})</button>
 
     <div class="card-title">Статус</div>
     <div style="display:flex;gap:6px;margin-bottom:14px">
@@ -1362,33 +1375,27 @@ function segPts(s) {
   if (Array.isArray(s.points) && s.points.length >= 2) return s.points;
   return [{ x: s.x1, y: s.y1 }, { x: s.x2, y: s.y2 }];
 }
-// плавная кривая через точки (Catmull-Rom → bezier). 2 точки = прямая.
-function smoothPath(pts) {
+// ломаная: прямые отрезки с резкими углами через все точки (как кабель по стенам)
+function linePath(pts) {
   if (!pts.length) return '';
-  if (pts.length === 1) return `M ${pts[0].x} ${pts[0].y}`;
   let d = `M ${pts[0].x} ${pts[0].y}`;
-  for (let i = 0; i < pts.length - 1; i++) {
-    const p0 = pts[i - 1] || pts[i], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2] || pts[i + 1];
-    const c1x = p1.x + (p2.x - p0.x) / 6, c1y = p1.y + (p2.y - p0.y) / 6;
-    const c2x = p2.x - (p3.x - p1.x) / 6, c2y = p2.y - (p3.y - p1.y) / 6;
-    d += ` C ${c1x.toFixed(2)} ${c1y.toFixed(2)} ${c2x.toFixed(2)} ${c2y.toFixed(2)} ${p2.x.toFixed(2)} ${p2.y.toFixed(2)}`;
-  }
+  for (let i = 1; i < pts.length; i++) d += ` L ${pts[i].x} ${pts[i].y}`;
   return d;
 }
 function segOverlaySvg(objId) {
   const W = 2.4; // толщина линии в пикселях — постоянная, не зависит от формы плана и зума
   const lines = segmentsForObject(objId).map(s => {
     const col = SEG_COLORS[s.status] || SEG_COLORS.done;
-    const d = smoothPath(segPts(s));
+    const d = linePath(segPts(s));
     // тёмная подложка (для читаемости на любом фоне) + сама цветная линия поверх
-    return `<path d="${d}" fill="none" stroke="rgba(0,0,0,.5)" stroke-width="${W+1.6}" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>`
-         + `<path d="${d}" fill="none" stroke="${col}" stroke-width="${W}" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>`;
+    return `<path d="${d}" fill="none" stroke="rgba(0,0,0,.5)" stroke-width="${W+1.6}" stroke-linecap="round" stroke-linejoin="miter" stroke-miterlimit="6" vector-effect="non-scaling-stroke"></path>`
+         + `<path d="${d}" fill="none" stroke="${col}" stroke-width="${W}" stroke-linecap="round" stroke-linejoin="miter" stroke-miterlimit="6" vector-effect="non-scaling-stroke"></path>`;
   }).join('');
   // линия, которую сейчас рисуем: предпросмотр кривой + точки-узлы
   let temp = '';
   if (drawingSegObjId === objId && segPoints.length) {
     if (segPoints.length >= 2) {
-      temp += `<path d="${smoothPath(segPoints)}" fill="none" stroke="#e8841a" stroke-width="${W}" stroke-dasharray="4 3" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>`;
+      temp += `<path d="${linePath(segPoints)}" fill="none" stroke="#e8841a" stroke-width="${W}" stroke-dasharray="4 3" stroke-linecap="round" stroke-linejoin="miter" stroke-miterlimit="6" vector-effect="non-scaling-stroke"></path>`;
     }
     temp += segPoints.map(p => `<circle cx="${p.x}" cy="${p.y}" r="2" fill="#e8841a" stroke="#fff" stroke-width="2" vector-effect="non-scaling-stroke"></circle>`).join('');
   }
@@ -1404,17 +1411,22 @@ function pinsOverlayHtml(objId, drawing) {
 function planImgHtml(objId, eng) {
   const placing = placingShleyfId && state.shleyfy.find(z => z.id === placingShleyfId)?.objectId === objId;
   const drawing = drawingSegObjId === objId;
+  const placingDevSh = placingDeviceShleyfId && state.shleyfy.find(z => z.id === placingDeviceShleyfId)?.objectId === objId
+    ? state.shleyfy.find(z => z.id === placingDeviceShleyfId) : null;
+  const lock = placing || drawing || !!placingDevSh;
   return `
     ${placing ? `<div style="font-size:13px;color:var(--yellow);margin-bottom:6px">Тапните на плане, куда поставить метку. <a onclick="cancelPlacing('${objId}')" style="color:var(--text2);text-decoration:underline;cursor:pointer">Отмена</a></div>` : ''}
+    ${placingDevSh ? `<div style="font-size:13px;color:var(--green);margin-bottom:6px">Ставьте приборы шлейфа «${placingDevSh.name}» — тап = прибор. <a onclick="stopPlacingDevice('${objId}')" style="color:var(--text2);text-decoration:underline;cursor:pointer">Готово</a></div>` : ''}
     ${drawing ? `<div style="font-size:13px;color:#e8841a;margin-bottom:6px">Тапайте точки линии по очереди (точек: ${segPoints.length}).<br>
       <a onclick="finishSegLine('${objId}')" style="color:var(--green);text-decoration:underline;cursor:pointer">✓ Завершить линию</a> · 
       <a onclick="undoSegPoint('${objId}')" style="color:var(--text2);text-decoration:underline;cursor:pointer">⌫ убрать точку</a> · 
       <a onclick="stopDrawingSeg('${objId}')" style="color:var(--text2);text-decoration:underline;cursor:pointer">выйти</a></div>` : ''}
     <div style="position:relative;line-height:0">
       <img src="${planCache[objId]}" onclick="planClick(event,'${objId}')"
-        style="width:100%;border-radius:8px;border:1px solid var(--border);display:block;cursor:${(placing || drawing) ? 'crosshair' : 'default'}">
+        style="width:100%;border-radius:8px;border:1px solid var(--border);display:block;cursor:${lock ? 'crosshair' : 'default'}">
       ${segOverlaySvg(objId)}
-      ${pinsOverlayHtml(objId, drawing)}
+      ${pinsOverlayHtml(objId, lock)}
+      ${devicesOverlayHtml(objId, lock)}
     </div>
     <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
       <button class="btn btn-secondary btn-sm" onclick="openPlanViewer('${objId}')">⛶ На весь экран</button>
@@ -1435,6 +1447,15 @@ function planClick(ev, objId) {
     placingShleyfId = null;
     refreshPlan(objId);
     showToast('📍 Метка поставлена');
+    return;
+  }
+  // 1b) постановка приборов шлейфа: каждый тап = прибор, остаёмся в режиме
+  if (placingDeviceShleyfId) {
+    const sh = state.shleyfy.find(z => z.id === placingDeviceShleyfId);
+    if (sh && sh.objectId === objId) {
+      addDeviceAt(sh, x, y);
+      refreshPlan(objId);
+    }
     return;
   }
   // 2) рисование кривой: каждый тап добавляет точку
@@ -1495,6 +1516,7 @@ function renderPlanViewer(objId) {
         <img src="${planCache[objId]}" onclick="planClick(event,'${objId}')" style="width:100%;display:block;cursor:${drawing?'crosshair':'default'}">
         ${segOverlaySvg(objId)}
         ${pinsOverlayHtml(objId, drawing)}
+        ${devicesOverlayHtml(objId, drawing)}
       </div>
     </div>`;
 }
@@ -1610,6 +1632,94 @@ function deleteSegment(id) {
     }).catch(() => {});
   }
   closeModal('segDetailModal');
+  if (obj) refreshPlan(obj);
+  showToast('Удалён');
+}
+
+// ─── Приборы шлейфа на плане ───
+function devicesForObject(objId) { return state.devices.filter(d => d.objectId === objId); }
+function devicesForShleyf(shId) { return state.devices.filter(d => d.shleyfId === shId).sort((a,b)=>(a.num||0)-(b.num||0)); }
+function devicesOverlayHtml(objId, lock) {
+  return devicesForObject(objId).map(d => {
+    const col = DEV_COLORS[d.status] || DEV_COLORS.todo;
+    return `<div onclick="event.stopPropagation();openDevice('${d.id}')" title="Прибор ${d.num||''}"
+      style="position:absolute;left:${d.x}%;top:${d.y}%;transform:translate(-50%,-50%);min-width:18px;height:18px;padding:0 3px;border-radius:9px;background:${col};border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.6);color:#fff;font-size:11px;font-weight:700;line-height:1;text-align:center;display:flex;align-items:center;justify-content:center;cursor:pointer;pointer-events:${lock?'none':'auto'}">${d.num||''}</div>`;
+  }).join('');
+}
+function startPlacingDevice(shId) {
+  if (!state.isOnline || !state.user?.token) { showToast('Ставить приборы — только онлайн'); return; }
+  const sh = state.shleyfy.find(x => x.id === shId);
+  if (!sh) return;
+  const obj = state.objects.find(o => o.id === sh.objectId);
+  if (!planCache[sh.objectId] && !(obj && obj.hasPlan)) { showToast('Сначала загрузите план объекта'); return; }
+  placingDeviceShleyfId = shId; placingShleyfId = null; drawingSegObjId = null;
+  closeModal('shleyfDetailModal');
+  showObjectDetail(sh.objectId);
+  showToast('Тапайте приборы на плане');
+}
+function addDeviceAt(sh, x, y) {
+  const nums = devicesForShleyf(sh.id).map(d => d.num || 0);
+  const num = (nums.length ? Math.max.apply(null, nums) : 0) + 1;
+  const dev = { id: 'dev' + Date.now() + Math.floor(Math.random()*1000), objectId: sh.objectId, shleyfId: sh.id, num, x: +x.toFixed(2), y: +y.toFixed(2), status: 'todo', note: '', author: myName(), ts: Date.now() };
+  state.devices.push(dev);
+  saveLocal(); pushDevice(dev);
+}
+function stopPlacingDevice(objId) { placingDeviceShleyfId = null; refreshPlan(objId); }
+function pushDevice(d) {
+  fetch(`${API_URL}/api/devices/save`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
+    body: JSON.stringify({ id: d.id, objectId: d.objectId, shleyfId: d.shleyfId, num: d.num, x: d.x, y: d.y, status: d.status, note: d.note || '', ts: d.ts }),
+  }).catch(() => {});
+}
+function openDevice(id) {
+  const d = state.devices.find(x => x.id === id);
+  if (!d) return;
+  const sh = state.shleyfy.find(x => x.id === d.shleyfId);
+  document.getElementById('deviceDetailContent').innerHTML = `
+    <div class="modal-title" style="margin-bottom:2px">Прибор №${d.num||''}</div>
+    <div style="font-size:13px;color:var(--text3);margin-bottom:14px">${sh ? '🧵 ' + sh.name : 'шлейф удалён'}${d.author ? ' · ' + d.author : ''}</div>
+    <div class="card-title">Статус</div>
+    <div style="display:flex;gap:6px;margin-bottom:14px">
+      ${['todo','done','problem'].map(st => `<button class="btn btn-sm ${d.status===st?'btn-primary':'btn-secondary'}" style="flex:1" onclick="setDevStatus('${id}','${st}')">${DEV_STATUS[st]}</button>`).join('')}
+    </div>
+    <div class="form-group">
+      <label class="form-label">Заметка</label>
+      <textarea class="form-input" id="devNote" rows="2" placeholder="Что за прибор / проблема...">${d.note || ''}</textarea>
+    </div>
+    <button class="btn btn-primary btn-sm" style="margin-bottom:10px" onclick="saveDevNote('${id}')">💾 Сохранить заметку</button>
+    <button class="btn btn-danger btn-sm" onclick="deleteDevice('${id}')">Удалить прибор</button>
+  `;
+  showModal('deviceDetailModal');
+}
+function setDevStatus(id, st) {
+  if (!state.isOnline || !state.user?.token) { showToast('Изменить — только онлайн'); return; }
+  const d = state.devices.find(x => x.id === id);
+  if (!d) return;
+  d.status = st; saveLocal(); pushDevice(d);
+  refreshPlan(d.objectId); openDevice(id);
+}
+function saveDevNote(id) {
+  if (!state.isOnline || !state.user?.token) { showToast('Сохранить — только онлайн'); return; }
+  const d = state.devices.find(x => x.id === id);
+  if (!d) return;
+  d.note = document.getElementById('devNote').value.trim(); saveLocal(); pushDevice(d);
+  showToast('✅ Сохранено');
+}
+function deleteDevice(id) {
+  if (!confirm('Удалить прибор?')) return;
+  const d = state.devices.find(x => x.id === id);
+  const obj = d ? d.objectId : null;
+  state.devices = state.devices.filter(x => x.id !== id);
+  saveLocal();
+  if (state.isOnline && state.user?.token) {
+    fetch(`${API_URL}/api/devices/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
+      body: JSON.stringify({ id }),
+    }).catch(() => {});
+  }
+  closeModal('deviceDetailModal');
   if (obj) refreshPlan(obj);
   showToast('Удалён');
 }
@@ -1905,6 +2015,7 @@ async function syncAll(silent = false) {
       if (Array.isArray(data.shleyfy)) state.shleyfy = data.shleyfy;
       if (Array.isArray(data.shleyfLog)) state.shleyfLog = data.shleyfLog;
       if (Array.isArray(data.segments)) state.planSegments = data.segments;
+      if (Array.isArray(data.devices)) state.devices = data.devices;
       if (Array.isArray(data.entries)) {
         const ids = new Set(state.entries.map(e => e.id));
         data.entries.forEach(e => { if (!ids.has(e.id)) state.entries.push(e); });
@@ -1929,6 +2040,7 @@ function saveLocal() {
   localStorage.setItem('ops_shleyfy', JSON.stringify(state.shleyfy));
   localStorage.setItem('ops_shleyflog', JSON.stringify(state.shleyfLog));
   localStorage.setItem('ops_segments', JSON.stringify(state.planSegments));
+  localStorage.setItem('ops_devices', JSON.stringify(state.devices));
   localStorage.setItem('ops_messages', JSON.stringify(state.messages));
   localStorage.setItem('ops_user',    JSON.stringify(state.user));
 }
