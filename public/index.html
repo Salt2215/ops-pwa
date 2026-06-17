@@ -1133,7 +1133,7 @@ let planCache = {};
 let currentPlanObjId = null;
 let placingShleyfId = null;
 let drawingSegObjId = null;
-let segFirstPoint = null;
+let segPoints = [];
 const SEG_COLORS = { done:'var(--green)', wip:'#e8841a', problem:'var(--red)' };
 const SEG_STATUS = { done:'Проложено', wip:'В работе', problem:'Проблема' };
 let planCtx = 'box';
@@ -1357,13 +1357,42 @@ function renderPlanBox(objId) {
   }
   box.innerHTML = planEmptyHtml(objId, eng);
 }
+// точки участка: либо массив points (кривая), либо две точки из x1y1/x2y2 (старые прямые)
+function segPts(s) {
+  if (Array.isArray(s.points) && s.points.length >= 2) return s.points;
+  return [{ x: s.x1, y: s.y1 }, { x: s.x2, y: s.y2 }];
+}
+// плавная кривая через точки (Catmull-Rom → bezier). 2 точки = прямая.
+function smoothPath(pts) {
+  if (!pts.length) return '';
+  if (pts.length === 1) return `M ${pts[0].x} ${pts[0].y}`;
+  let d = `M ${pts[0].x} ${pts[0].y}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1] || pts[i], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2] || pts[i + 1];
+    const c1x = p1.x + (p2.x - p0.x) / 6, c1y = p1.y + (p2.y - p0.y) / 6;
+    const c2x = p2.x - (p3.x - p1.x) / 6, c2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C ${c1x.toFixed(2)} ${c1y.toFixed(2)} ${c2x.toFixed(2)} ${c2y.toFixed(2)} ${p2.x.toFixed(2)} ${p2.y.toFixed(2)}`;
+  }
+  return d;
+}
 function segOverlaySvg(objId) {
+  const W = 2.4; // толщина линии в пикселях — постоянная, не зависит от формы плана и зума
   const lines = segmentsForObject(objId).map(s => {
     const col = SEG_COLORS[s.status] || SEG_COLORS.done;
-    return `<line x1="${s.x1}" y1="${s.y1}" x2="${s.x2}" y2="${s.y2}" stroke="${col}" stroke-width="0.9" stroke-linecap="round"></line>`;
+    const d = smoothPath(segPts(s));
+    // тёмная подложка (для читаемости на любом фоне) + сама цветная линия поверх
+    return `<path d="${d}" fill="none" stroke="rgba(0,0,0,.5)" stroke-width="${W+1.6}" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>`
+         + `<path d="${d}" fill="none" stroke="${col}" stroke-width="${W}" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>`;
   }).join('');
-  const tempPt = (drawingSegObjId === objId && segFirstPoint) ? `<circle cx="${segFirstPoint.x}" cy="${segFirstPoint.y}" r="1.2" fill="#e8841a"></circle>` : '';
-  return `<svg viewBox="0 0 100 100" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none">${lines}${tempPt}</svg>`;
+  // линия, которую сейчас рисуем: предпросмотр кривой + точки-узлы
+  let temp = '';
+  if (drawingSegObjId === objId && segPoints.length) {
+    if (segPoints.length >= 2) {
+      temp += `<path d="${smoothPath(segPoints)}" fill="none" stroke="#e8841a" stroke-width="${W}" stroke-dasharray="4 3" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>`;
+    }
+    temp += segPoints.map(p => `<circle cx="${p.x}" cy="${p.y}" r="2" fill="#e8841a" stroke="#fff" stroke-width="2" vector-effect="non-scaling-stroke"></circle>`).join('');
+  }
+  return `<svg viewBox="0 0 100 100" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none">${lines}${temp}</svg>`;
 }
 function pinsOverlayHtml(objId, drawing) {
   return shleyfyForObject(objId).filter(s => typeof s.pinX === 'number' && typeof s.pinY === 'number').map(s => {
@@ -1377,7 +1406,10 @@ function planImgHtml(objId, eng) {
   const drawing = drawingSegObjId === objId;
   return `
     ${placing ? `<div style="font-size:13px;color:var(--yellow);margin-bottom:6px">Тапните на плане, куда поставить метку. <a onclick="cancelPlacing('${objId}')" style="color:var(--text2);text-decoration:underline;cursor:pointer">Отмена</a></div>` : ''}
-    ${drawing ? `<div style="font-size:13px;color:#e8841a;margin-bottom:6px">Рисуем участки: тапните начало, затем конец. <a onclick="stopDrawingSeg('${objId}')" style="color:var(--text2);text-decoration:underline;cursor:pointer">Готово</a></div>` : ''}
+    ${drawing ? `<div style="font-size:13px;color:#e8841a;margin-bottom:6px">Тапайте точки линии по очереди (точек: ${segPoints.length}).<br>
+      <a onclick="finishSegLine('${objId}')" style="color:var(--green);text-decoration:underline;cursor:pointer">✓ Завершить линию</a> · 
+      <a onclick="undoSegPoint('${objId}')" style="color:var(--text2);text-decoration:underline;cursor:pointer">⌫ убрать точку</a> · 
+      <a onclick="stopDrawingSeg('${objId}')" style="color:var(--text2);text-decoration:underline;cursor:pointer">выйти</a></div>` : ''}
     <div style="position:relative;line-height:0">
       <img src="${planCache[objId]}" onclick="planClick(event,'${objId}')"
         style="width:100%;border-radius:8px;border:1px solid var(--border);display:block;cursor:${(placing || drawing) ? 'crosshair' : 'default'}">
@@ -1405,28 +1437,22 @@ function planClick(ev, objId) {
     showToast('📍 Метка поставлена');
     return;
   }
-  // 2) рисование участка двумя тапами
+  // 2) рисование кривой: каждый тап добавляет точку
   if (drawingSegObjId === objId) {
-    if (!segFirstPoint) {
-      segFirstPoint = { x, y };
-      refreshPlan(objId);
-      showToast('Теперь тапните конец участка');
-    } else {
-      const seg = { id: 'seg' + Date.now(), objectId: objId, x1: segFirstPoint.x, y1: segFirstPoint.y, x2: x, y2: y, status: 'done', note: '', author: myName(), ts: Date.now() };
-      state.planSegments.push(seg);
-      saveLocal(); pushSegment(seg);
-      segFirstPoint = null;
-      refreshPlan(objId);
-      showToast('✅ Участок добавлен');
-    }
+    segPoints.push({ x: +x.toFixed(2), y: +y.toFixed(2) });
+    refreshPlan(objId);
+    if (segPoints.length === 1) showToast('Точка 1. Тапайте дальше, потом «Завершить»');
     return;
   }
-  // 3) обычный тап — открыть ближайший участок
+  // 3) обычный тап — открыть ближайший участок (по кривой)
   const segs = segmentsForObject(objId);
   let best = null, bestD = 4;
   for (const s of segs) {
-    const d = pointDistToSeg(x, y, s.x1, s.y1, s.x2, s.y2);
-    if (d < bestD) { bestD = d; best = s; }
+    const pts = segPts(s);
+    for (let i = 0; i < pts.length - 1; i++) {
+      const d = pointDistToSeg(x, y, pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y);
+      if (d < bestD) { bestD = d; best = s; }
+    }
   }
   if (best) openSegment(best.id);
 }
@@ -1438,7 +1464,7 @@ function openPlanViewer(objId) {
   renderPlanViewer(objId);
 }
 function closePlanViewer() {
-  planCtx = 'box'; drawingSegObjId = null; segFirstPoint = null;
+  planCtx = 'box'; drawingSegObjId = null; segPoints = [];
   closeModal('planViewerModal');
   if (currentViewerObj) renderPlanBox(currentViewerObj);
 }
@@ -1457,9 +1483,13 @@ function renderPlanViewer(objId) {
       <button class="btn btn-secondary btn-sm" onclick="zoomViewer(1.5)">+</button>
       <span style="font-size:12px;color:var(--text3)">${Math.round(viewerZoom*100)}%</span>
       <div style="flex:1"></div>
-      <button class="btn ${drawing?'btn-primary':'btn-secondary'} btn-sm" onclick="${drawing?`stopDrawingSeg('${objId}')`:`startDrawingSeg('${objId}')`}">${drawing?'Готово':'✏️ Рисовать'}</button>
+      ${drawing
+        ? `<button class="btn btn-secondary btn-sm" onclick="undoSegPoint('${objId}')">⌫</button>
+           <button class="btn btn-primary btn-sm" onclick="finishSegLine('${objId}')">✓ Завершить</button>
+           <button class="btn btn-secondary btn-sm" onclick="stopDrawingSeg('${objId}')">✕</button>`
+        : `<button class="btn btn-secondary btn-sm" onclick="startDrawingSeg('${objId}')">✏️ Рисовать</button>`}
     </div>
-    ${drawing ? `<div style="padding:6px 12px;background:var(--bg2);color:#e8841a;font-size:13px;text-align:center;flex-shrink:0">Тапните начало участка, затем конец</div>` : ''}
+    ${drawing ? `<div style="padding:6px 12px;background:var(--bg2);color:#e8841a;font-size:13px;text-align:center;flex-shrink:0">Тапайте точки линии по очереди (точек: ${segPoints.length}), затем «✓ Завершить»</div>` : ''}
     <div style="flex:1;overflow:auto;background:var(--bg);-webkit-overflow-scrolling:touch">
       <div style="position:relative;width:${viewerZoom*100}%;line-height:0">
         <img src="${planCache[objId]}" onclick="planClick(event,'${objId}')" style="width:100%;display:block;cursor:${drawing?'crosshair':'default'}">
@@ -1494,19 +1524,41 @@ function pointDistToSeg(px, py, x1, y1, x2, y2) {
 }
 function startDrawingSeg(objId) {
   if (!state.isOnline || !state.user?.token) { showToast('Рисовать участки — только онлайн'); return; }
-  drawingSegObjId = objId; segFirstPoint = null; placingShleyfId = null;
+  drawingSegObjId = objId; segPoints = []; placingShleyfId = null;
   refreshPlan(objId);
-  showToast('Тапните начало участка');
+  showToast('Тапайте точки линии по очереди');
+}
+function undoSegPoint(objId) {
+  if (!segPoints.length) return;
+  segPoints.pop();
+  refreshPlan(objId);
+}
+function finishSegLine(objId) {
+  if (segPoints.length < 2) { showToast('Нужно минимум 2 точки'); return; }
+  const pts = segPoints.slice();
+  const seg = {
+    id: 'seg' + Date.now(), objectId: objId,
+    points: pts,
+    x1: pts[0].x, y1: pts[0].y, x2: pts[pts.length - 1].x, y2: pts[pts.length - 1].y,
+    status: 'done', note: '', author: myName(), ts: Date.now()
+  };
+  state.planSegments.push(seg);
+  saveLocal(); pushSegment(seg);
+  segPoints = [];
+  refreshPlan(objId);
+  showToast('✅ Линия добавлена');
 }
 function stopDrawingSeg(objId) {
-  drawingSegObjId = null; segFirstPoint = null;
+  // если линия начата (>=2 точек) — сохраним, чтобы работа не пропала
+  if (segPoints.length >= 2) finishSegLine(objId);
+  drawingSegObjId = null; segPoints = [];
   refreshPlan(objId);
 }
 function pushSegment(seg) {
   fetch(`${API_URL}/api/segments/save`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
-    body: JSON.stringify({ id: seg.id, objectId: seg.objectId, x1: seg.x1, y1: seg.y1, x2: seg.x2, y2: seg.y2, status: seg.status, note: seg.note || '', ts: seg.ts }),
+    body: JSON.stringify({ id: seg.id, objectId: seg.objectId, points: seg.points || null, x1: seg.x1, y1: seg.y1, x2: seg.x2, y2: seg.y2, status: seg.status, note: seg.note || '', ts: seg.ts }),
   }).catch(() => {});
 }
 function openSegment(id) {
