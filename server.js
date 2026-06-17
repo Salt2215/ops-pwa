@@ -156,6 +156,21 @@ async function initDB() {
     ALTER TABLE pwa_shleyfy ADD COLUMN IF NOT EXISTS pin_x REAL;
     ALTER TABLE pwa_shleyfy ADD COLUMN IF NOT EXISTS pin_y REAL;
     ALTER TABLE pwa_segments ADD COLUMN IF NOT EXISTS points TEXT;
+    CREATE TABLE IF NOT EXISTS pwa_drawings (
+      id TEXT PRIMARY KEY,
+      object_id TEXT,
+      name TEXT DEFAULT 'Чертёж',
+      image TEXT DEFAULT '',
+      ts BIGINT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+    ALTER TABLE pwa_segments ADD COLUMN IF NOT EXISTS drawing_id TEXT;
+    ALTER TABLE pwa_devices  ADD COLUMN IF NOT EXISTS drawing_id TEXT;
+    ALTER TABLE pwa_shleyfy  ADD COLUMN IF NOT EXISTS pin_drawing_id TEXT;
+    INSERT INTO pwa_drawings (id, object_id, name, image, ts)
+      SELECT object_id, object_id, 'Чертёж 1', image, (extract(epoch from now())*1000)::bigint
+      FROM pwa_plans p
+      WHERE NOT EXISTS (SELECT 1 FROM pwa_drawings d WHERE d.id = p.object_id);
   `);
   console.log('DB initialized');
 }
@@ -208,7 +223,7 @@ app.get('/api/sync', auth, async (req, res) => {
   try {
     const eng = isEngineer(req.user);
     const allObjects = (await pool.query('SELECT * FROM pwa_objects ORDER BY created_at DESC')).rows;
-    const planIds = new Set((await pool.query('SELECT object_id FROM pwa_plans')).rows.map(r => r.object_id));
+    const planIds = new Set((await pool.query('SELECT DISTINCT object_id FROM pwa_drawings')).rows.map(r => r.object_id));
 
     // Инженер видит все объекты, монтажник — только назначенные ему
     const objects = eng
@@ -248,6 +263,10 @@ app.get('/api/sync', auth, async (req, res) => {
       ? (await pool.query(`SELECT * FROM pwa_devices WHERE object_id = ANY($1) ORDER BY created_at ASC`, [objIds])).rows
       : [];
 
+    const drawRows = objIds.length > 0
+      ? (await pool.query(`SELECT id, object_id, name, ts FROM pwa_drawings WHERE object_id = ANY($1) ORDER BY created_at ASC`, [objIds])).rows
+      : [];
+
     const normObj = objects.map(o => ({
       id: o.id, name: o.name, address: o.address, customer: o.customer,
       status: o.status, planCable: o.plan_cable, planDevices: o.plan_devices,
@@ -269,25 +288,26 @@ app.get('/api/sync', auth, async (req, res) => {
       planCable: s.plan_cable, planDevices: s.plan_devices,
       doneCable: s.done_cable, doneDevices: s.done_devices,
       status: s.status, assignedTo: s.assigned_to || '',
-      pinX: s.pin_x, pinY: s.pin_y, ts: s.created_at
+      pinX: s.pin_x, pinY: s.pin_y, pinDrawingId: s.pin_drawing_id || null, ts: s.created_at
     }));
     const normLog = logRows.map(l => ({
       id: l.id, shleyfId: l.shleyf_id, author: l.author_name,
       text: l.text, isProblem: l.is_problem, ts: l.ts
     }));
     const normSeg = segRows.map(s => ({
-      id: s.id, objectId: s.object_id,
+      id: s.id, objectId: s.object_id, drawingId: s.drawing_id || null,
       x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2,
       points: safeArr(s.points),
       status: s.status, note: s.note || '', author: s.author_name || '', ts: s.ts
     }));
     const normDev = devRows.map(d => ({
-      id: d.id, objectId: d.object_id, shleyfId: d.shleyf_id,
+      id: d.id, objectId: d.object_id, shleyfId: d.shleyf_id, drawingId: d.drawing_id || null,
       num: d.num, x: d.x, y: d.y,
       status: d.status, note: d.note || '', author: d.author_name || '', ts: d.ts
     }));
+    const normDraw = drawRows.map(d => ({ id: d.id, objectId: d.object_id, name: d.name || 'Чертёж', ts: d.ts }));
 
-    res.json({ objects: normObj, team: normTeam, entries: normEnt, projects: normProj, shleyfy: normSh, shleyfLog: normLog, segments: normSeg, devices: normDev });
+    res.json({ objects: normObj, team: normTeam, entries: normEnt, projects: normProj, shleyfy: normSh, shleyfLog: normLog, segments: normSeg, devices: normDev, drawings: normDraw });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: e.message });
@@ -376,11 +396,11 @@ app.post('/api/shleyfy/sync', auth, async (req, res) => {
     const list = req.body.shleyfy || [];
     for (const s of list) {
       await pool.query(
-        `INSERT INTO pwa_shleyfy (id,object_id,name,system,plan_cable,plan_devices,assigned_to,pin_x,pin_y,owner_uid)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-         ON CONFLICT (id) DO UPDATE SET object_id=$2,name=$3,system=$4,plan_cable=$5,plan_devices=$6,assigned_to=$7,pin_x=$8,pin_y=$9`,
+        `INSERT INTO pwa_shleyfy (id,object_id,name,system,plan_cable,plan_devices,assigned_to,pin_x,pin_y,pin_drawing_id,owner_uid)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         ON CONFLICT (id) DO UPDATE SET object_id=$2,name=$3,system=$4,plan_cable=$5,plan_devices=$6,assigned_to=$7,pin_x=$8,pin_y=$9,pin_drawing_id=$10`,
         [s.id, s.objectId, s.name || '', s.system || '', s.planCable || 0, s.planDevices || 0, s.assignedTo || '',
-         (typeof s.pinX === 'number' ? s.pinX : null), (typeof s.pinY === 'number' ? s.pinY : null), req.user.uid]
+         (typeof s.pinX === 'number' ? s.pinX : null), (typeof s.pinY === 'number' ? s.pinY : null), s.pinDrawingId || null, req.user.uid]
       );
     }
     res.json({ ok: true });
@@ -500,7 +520,7 @@ app.post('/api/plan/delete', auth, async (req, res) => {
 // ─── Участки на плане (рисует инженер или назначенный монтажник) ──────────────
 app.post('/api/segments/save', auth, async (req, res) => {
   try {
-    const { id, objectId, points, x1, y1, x2, y2, status, note, ts } = req.body;
+    const { id, objectId, drawingId, points, x1, y1, x2, y2, status, note, ts } = req.body;
     if (!id || !objectId) return res.status(400).json({ error: 'no data' });
     if (!isEngineer(req.user)) {
       const o = await pool.query('SELECT assigned_to FROM pwa_objects WHERE id=$1', [objectId]);
@@ -520,10 +540,10 @@ app.post('/api/segments/save', auth, async (req, res) => {
     const ax2 = pts ? pts[pts.length - 1].x : x2, ay2 = pts ? pts[pts.length - 1].y : y2;
     const ptsJson = pts ? JSON.stringify(pts) : null;
     await pool.query(
-      `INSERT INTO pwa_segments (id,object_id,x1,y1,x2,y2,status,note,author_name,ts,points)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-       ON CONFLICT (id) DO UPDATE SET x1=$3,y1=$4,x2=$5,y2=$6,status=$7,note=$8,points=$11`,
-      [id, objectId, ax1, ay1, ax2, ay2, st, note || '', req.user.name, ts || Date.now(), ptsJson]
+      `INSERT INTO pwa_segments (id,object_id,x1,y1,x2,y2,status,note,author_name,ts,points,drawing_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       ON CONFLICT (id) DO UPDATE SET x1=$3,y1=$4,x2=$5,y2=$6,status=$7,note=$8,points=$11,drawing_id=$12`,
+      [id, objectId, ax1, ay1, ax2, ay2, st, note || '', req.user.name, ts || Date.now(), ptsJson, drawingId || null]
     );
     res.json({ ok: true });
   } catch (e) {
@@ -552,7 +572,7 @@ app.post('/api/segments/delete', auth, async (req, res) => {
 
 app.post('/api/devices/save', auth, async (req, res) => {
   try {
-    const { id, objectId, shleyfId, num, x, y, status, note, ts } = req.body;
+    const { id, objectId, shleyfId, drawingId, num, x, y, status, note, ts } = req.body;
     if (!id || !objectId) return res.status(400).json({ error: 'no data' });
     if (!isEngineer(req.user)) {
       const o = await pool.query('SELECT assigned_to FROM pwa_objects WHERE id=$1', [objectId]);
@@ -563,10 +583,10 @@ app.post('/api/devices/save', auth, async (req, res) => {
     const px = Math.max(0, Math.min(100, +x || 0));
     const py = Math.max(0, Math.min(100, +y || 0));
     await pool.query(
-      `INSERT INTO pwa_devices (id,object_id,shleyf_id,num,x,y,status,note,author_name,ts)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-       ON CONFLICT (id) DO UPDATE SET shleyf_id=$3,num=$4,x=$5,y=$6,status=$7,note=$8`,
-      [id, objectId, shleyfId || null, parseInt(num) || 0, px, py, st, note || '', req.user.name, ts || Date.now()]
+      `INSERT INTO pwa_devices (id,object_id,shleyf_id,num,x,y,status,note,author_name,ts,drawing_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       ON CONFLICT (id) DO UPDATE SET shleyf_id=$3,num=$4,x=$5,y=$6,status=$7,note=$8,drawing_id=$11`,
+      [id, objectId, shleyfId || null, parseInt(num) || 0, px, py, st, note || '', req.user.name, ts || Date.now(), drawingId || null]
     );
     res.json({ ok: true });
   } catch (e) {
@@ -586,6 +606,57 @@ app.post('/api/devices/delete', auth, async (req, res) => {
       if (!allowed) return res.status(403).json({ error: 'forbidden' });
     }
     await pool.query('DELETE FROM pwa_devices WHERE id=$1', [id]);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Чертежи объекта (мультиплан) ───
+app.post('/api/drawings/save', auth, async (req, res) => {
+  try {
+    if (!isEngineer(req.user)) return res.status(403).json({ error: 'forbidden' });
+    const { id, objectId, name, image, ts } = req.body;
+    if (!id || !objectId) return res.status(400).json({ error: 'no data' });
+    if (typeof image === 'string' && image) {
+      await pool.query(
+        `INSERT INTO pwa_drawings (id,object_id,name,image,ts) VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT (id) DO UPDATE SET object_id=$2,name=$3,image=$4`,
+        [id, objectId, name || 'Чертёж', image, ts || Date.now()]
+      );
+    } else {
+      await pool.query(
+        `INSERT INTO pwa_drawings (id,object_id,name,image,ts) VALUES ($1,$2,$3,'',$4)
+         ON CONFLICT (id) DO UPDATE SET object_id=$2,name=$3`,
+        [id, objectId, name || 'Чертёж', ts || Date.now()]
+      );
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/drawing/:id', auth, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT image FROM pwa_drawings WHERE id=$1', [req.params.id]);
+    res.json({ id: req.params.id, image: rows[0] ? rows[0].image : '' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/drawings/delete', auth, async (req, res) => {
+  try {
+    if (!isEngineer(req.user)) return res.status(403).json({ error: 'forbidden' });
+    const { id } = req.body;
+    if (!id) return res.json({ ok: true });
+    await pool.query('DELETE FROM pwa_segments WHERE drawing_id=$1', [id]);
+    await pool.query('DELETE FROM pwa_devices WHERE drawing_id=$1', [id]);
+    await pool.query('UPDATE pwa_shleyfy SET pin_x=NULL, pin_y=NULL, pin_drawing_id=NULL WHERE pin_drawing_id=$1', [id]);
+    await pool.query('DELETE FROM pwa_drawings WHERE id=$1', [id]);
     res.json({ ok: true });
   } catch (e) {
     console.error(e);
