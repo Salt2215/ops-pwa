@@ -138,6 +138,18 @@ async function initDB() {
       ts BIGINT,
       created_at TIMESTAMP DEFAULT NOW()
     );
+    CREATE TABLE IF NOT EXISTS pwa_devices (
+      id TEXT PRIMARY KEY,
+      object_id TEXT,
+      shleyf_id TEXT,
+      num INTEGER,
+      x REAL, y REAL,
+      status TEXT DEFAULT 'todo',
+      note TEXT DEFAULT '',
+      author_name TEXT,
+      ts BIGINT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
     ALTER TABLE pwa_objects ADD COLUMN IF NOT EXISTS assigned_to TEXT DEFAULT '';
     ALTER TABLE pwa_team    ADD COLUMN IF NOT EXISTS login_code TEXT;
     ALTER TABLE pwa_entries ADD COLUMN IF NOT EXISTS user_name TEXT;
@@ -232,6 +244,10 @@ app.get('/api/sync', auth, async (req, res) => {
       ? (await pool.query(`SELECT * FROM pwa_segments WHERE object_id = ANY($1) ORDER BY created_at ASC`, [objIds])).rows
       : [];
 
+    const devRows = objIds.length > 0
+      ? (await pool.query(`SELECT * FROM pwa_devices WHERE object_id = ANY($1) ORDER BY created_at ASC`, [objIds])).rows
+      : [];
+
     const normObj = objects.map(o => ({
       id: o.id, name: o.name, address: o.address, customer: o.customer,
       status: o.status, planCable: o.plan_cable, planDevices: o.plan_devices,
@@ -265,8 +281,13 @@ app.get('/api/sync', auth, async (req, res) => {
       points: safeArr(s.points),
       status: s.status, note: s.note || '', author: s.author_name || '', ts: s.ts
     }));
+    const normDev = devRows.map(d => ({
+      id: d.id, objectId: d.object_id, shleyfId: d.shleyf_id,
+      num: d.num, x: d.x, y: d.y,
+      status: d.status, note: d.note || '', author: d.author_name || '', ts: d.ts
+    }));
 
-    res.json({ objects: normObj, team: normTeam, entries: normEnt, projects: normProj, shleyfy: normSh, shleyfLog: normLog, segments: normSeg });
+    res.json({ objects: normObj, team: normTeam, entries: normEnt, projects: normProj, shleyfy: normSh, shleyfLog: normLog, segments: normSeg, devices: normDev });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: e.message });
@@ -522,6 +543,49 @@ app.post('/api/segments/delete', auth, async (req, res) => {
       if (!allowed) return res.status(403).json({ error: 'forbidden' });
     }
     await pool.query('DELETE FROM pwa_segments WHERE id=$1', [id]);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/devices/save', auth, async (req, res) => {
+  try {
+    const { id, objectId, shleyfId, num, x, y, status, note, ts } = req.body;
+    if (!id || !objectId) return res.status(400).json({ error: 'no data' });
+    if (!isEngineer(req.user)) {
+      const o = await pool.query('SELECT assigned_to FROM pwa_objects WHERE id=$1', [objectId]);
+      const allowed = o.rows[0] && safeArr(o.rows[0].assigned_to).includes(req.user.teamId);
+      if (!allowed) return res.status(403).json({ error: 'Объект вам не назначен' });
+    }
+    const st = ['done', 'todo', 'problem'].includes(status) ? status : 'todo';
+    const px = Math.max(0, Math.min(100, +x || 0));
+    const py = Math.max(0, Math.min(100, +y || 0));
+    await pool.query(
+      `INSERT INTO pwa_devices (id,object_id,shleyf_id,num,x,y,status,note,author_name,ts)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       ON CONFLICT (id) DO UPDATE SET shleyf_id=$3,num=$4,x=$5,y=$6,status=$7,note=$8`,
+      [id, objectId, shleyfId || null, parseInt(num) || 0, px, py, st, note || '', req.user.name, ts || Date.now()]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/devices/delete', auth, async (req, res) => {
+  try {
+    const { id } = req.body;
+    const r = await pool.query('SELECT object_id FROM pwa_devices WHERE id=$1', [id]);
+    if (!r.rows[0]) return res.json({ ok: true });
+    if (!isEngineer(req.user)) {
+      const o = await pool.query('SELECT assigned_to FROM pwa_objects WHERE id=$1', [r.rows[0].object_id]);
+      const allowed = o.rows[0] && safeArr(o.rows[0].assigned_to).includes(req.user.teamId);
+      if (!allowed) return res.status(403).json({ error: 'forbidden' });
+    }
+    await pool.query('DELETE FROM pwa_devices WHERE id=$1', [id]);
     res.json({ ok: true });
   } catch (e) {
     console.error(e);
