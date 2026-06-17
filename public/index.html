@@ -1382,6 +1382,22 @@ function linePath(pts) {
   for (let i = 1; i < pts.length; i++) d += ` L ${pts[i].x} ${pts[i].y}`;
   return d;
 }
+// привязка новой точки к прямым углам относительно предыдущей (0/45/90°), если тап близко к оси
+function snapAngle(px, py, x, y) {
+  const dx = x - px, dy = y - py;
+  if (dx === 0 && dy === 0) return { x, y };
+  const len = Math.hypot(dx, dy);
+  const ang = Math.atan2(dy, dx);
+  const step = Math.PI / 4; // шаг 45°
+  const snapped = Math.round(ang / step) * step;
+  let diff = Math.abs(ang - snapped);
+  if (diff > Math.PI) diff = 2 * Math.PI - diff;
+  if (diff > 15 * Math.PI / 180) return { x, y }; // далеко от оси — оставляем как есть
+  return {
+    x: +(px + len * Math.cos(snapped)).toFixed(2),
+    y: +(py + len * Math.sin(snapped)).toFixed(2),
+  };
+}
 function segOverlaySvg(objId) {
   const W = 2.4; // толщина линии в пикселях — постоянная, не зависит от формы плана и зума
   const lines = segmentsForObject(objId).map(s => {
@@ -1458,9 +1474,15 @@ function planClick(ev, objId) {
     }
     return;
   }
-  // 2) рисование кривой: каждый тап добавляет точку
+  // 2) рисование линии: каждый тап добавляет точку (с привязкой к прямым углам)
   if (drawingSegObjId === objId) {
-    segPoints.push({ x: +x.toFixed(2), y: +y.toFixed(2) });
+    let nx = +x.toFixed(2), ny = +y.toFixed(2);
+    if (segPoints.length > 0) {
+      const prev = segPoints[segPoints.length - 1];
+      const sp = snapAngle(prev.x, prev.y, nx, ny);
+      nx = sp.x; ny = sp.y;
+    }
+    segPoints.push({ x: nx, y: ny });
     refreshPlan(objId);
     if (segPoints.length === 1) showToast('Точка 1. Тапайте дальше, потом «Завершить»');
     return;
