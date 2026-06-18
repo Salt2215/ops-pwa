@@ -165,6 +165,7 @@ async function initDB() {
       created_at TIMESTAMP DEFAULT NOW()
     );
     ALTER TABLE pwa_segments ADD COLUMN IF NOT EXISTS drawing_id TEXT;
+    ALTER TABLE pwa_segments ADD COLUMN IF NOT EXISTS shleyf_id TEXT;
     ALTER TABLE pwa_devices  ADD COLUMN IF NOT EXISTS drawing_id TEXT;
     ALTER TABLE pwa_shleyfy  ADD COLUMN IF NOT EXISTS pin_drawing_id TEXT;
     INSERT INTO pwa_drawings (id, object_id, name, image, ts)
@@ -295,7 +296,7 @@ app.get('/api/sync', auth, async (req, res) => {
       text: l.text, isProblem: l.is_problem, ts: l.ts
     }));
     const normSeg = segRows.map(s => ({
-      id: s.id, objectId: s.object_id, drawingId: s.drawing_id || null,
+      id: s.id, objectId: s.object_id, drawingId: s.drawing_id || null, shleyfId: s.shleyf_id || null,
       x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2,
       points: safeArr(s.points),
       status: s.status, note: s.note || '', author: s.author_name || '', ts: s.ts
@@ -520,7 +521,7 @@ app.post('/api/plan/delete', auth, async (req, res) => {
 // ─── Участки на плане (рисует инженер или назначенный монтажник) ──────────────
 app.post('/api/segments/save', auth, async (req, res) => {
   try {
-    const { id, objectId, drawingId, points, x1, y1, x2, y2, status, note, ts } = req.body;
+    const { id, objectId, drawingId, shleyfId, points, x1, y1, x2, y2, status, note, ts } = req.body;
     if (!id || !objectId) return res.status(400).json({ error: 'no data' });
     if (!isEngineer(req.user)) {
       const o = await pool.query('SELECT assigned_to FROM pwa_objects WHERE id=$1', [objectId]);
@@ -540,10 +541,10 @@ app.post('/api/segments/save', auth, async (req, res) => {
     const ax2 = pts ? pts[pts.length - 1].x : x2, ay2 = pts ? pts[pts.length - 1].y : y2;
     const ptsJson = pts ? JSON.stringify(pts) : null;
     await pool.query(
-      `INSERT INTO pwa_segments (id,object_id,x1,y1,x2,y2,status,note,author_name,ts,points,drawing_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-       ON CONFLICT (id) DO UPDATE SET x1=$3,y1=$4,x2=$5,y2=$6,status=$7,note=$8,points=$11,drawing_id=$12`,
-      [id, objectId, ax1, ay1, ax2, ay2, st, note || '', req.user.name, ts || Date.now(), ptsJson, drawingId || null]
+      `INSERT INTO pwa_segments (id,object_id,x1,y1,x2,y2,status,note,author_name,ts,points,drawing_id,shleyf_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       ON CONFLICT (id) DO UPDATE SET x1=$3,y1=$4,x2=$5,y2=$6,status=$7,note=$8,points=$11,drawing_id=$12,shleyf_id=$13`,
+      [id, objectId, ax1, ay1, ax2, ay2, st, note || '', req.user.name, ts || Date.now(), ptsJson, drawingId || null, shleyfId || null]
     );
     res.json({ ok: true });
   } catch (e) {
