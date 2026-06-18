@@ -1158,6 +1158,7 @@ function activeDid(objId) {
 }
 function drawingName(did) { const d = state.drawings.find(x => x.id === did); return d ? d.name : 'Чертёж'; }
 let currentPlanObjId = null;
+let planUploadSplit = false; // true — многостраничный PDF раскладываем по отдельным чертежам
 let placingShleyfId = null;
 let drawingSegObjId = null;
 let segPoints = [];
@@ -1451,7 +1452,7 @@ function addDrawing(objId) {
   }).catch(() => {});
   activeDrawing[objId] = did;
   renderPlanBox(objId);
-  triggerPlanUpload(objId); // сразу предложим выбрать файл для нового чертежа
+  triggerPlanUpload(objId, true); // сразу предложим выбрать файл; многостраничный PDF разложим по листам
 }
 function renameDrawing(objId) {
   if (!isEngineer()) return;
@@ -1552,7 +1553,7 @@ function planImgHtml(objId, eng) {
     <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
       <button class="btn btn-secondary btn-sm" onclick="openPlanViewer('${objId}')">⛶ На весь экран</button>
       <button class="btn btn-secondary btn-sm" onclick="startDrawingSeg('${objId}')">✏️ Рисовать участки</button>
-      ${eng ? `<button class="btn btn-secondary btn-sm" onclick="triggerPlanUpload('${objId}')">Заменить картинку</button>
+      ${eng ? `<button class="btn btn-secondary btn-sm" onclick="triggerPlanUpload('${objId}', false)">Заменить картинку</button>
       <button class="btn btn-secondary btn-sm" onclick="renameDrawing('${objId}')">✎ Имя</button>
       <button class="btn btn-danger btn-sm" onclick="deletePlan('${objId}')">Удалить чертёж</button>` : ''}
     </div>`;
@@ -1924,10 +1925,11 @@ function planEmptyHtml(objId, eng) {
     ? `<button class="btn btn-secondary btn-sm" onclick="addDrawing('${objId}')">📄 Добавить чертёж (PDF или фото)</button>`
     : `<div style="font-size:13px;color:var(--text3)">Чертёж пока не загружен.</div>`;
 }
-function triggerPlanUpload(objId) {
+function triggerPlanUpload(objId, split) {
   if (!isEngineer()) return;
   if (!state.isOnline || !state.user?.token) { showToast('Загрузка плана — только онлайн'); return; }
   currentPlanObjId = objId;
+  planUploadSplit = !!split;
   const inp = document.getElementById('planFileInput');
   inp.value = '';
   inp.click();
@@ -1936,8 +1938,9 @@ function handlePlanFile(ev) {
   const file = ev.target.files && ev.target.files[0];
   if (!file) return;
   const objId = currentPlanObjId;
+  const split = planUploadSplit;
   const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '');
-  if (isPdf) { renderPdfPlan(file, objId); return; }
+  if (isPdf) { renderPdfPlan(file, objId, split); return; }
   // Картинка (jpg/png/...) — как раньше: сжать до 2400px
   const reader = new FileReader();
   reader.onload = () => {
@@ -1958,36 +1961,79 @@ function handlePlanFile(ev) {
   reader.readAsDataURL(file);
 }
 
-// Рендер первой страницы PDF в чёткую картинку (высокое разрешение под зум)
-function renderPdfPlan(file, objId) {
+// Рендер PDF. Одна страница → чёткая картинка в активный чертёж.
+// Многостраничный (если split=true) → каждый лист становится отдельным чертежом «Лист 1, Лист 2…».
+function renderPdfPlan(file, objId, split) {
   if (!window.pdfjsLib) { showToast('PDF-движок не загрузился — нужен интернет, обновите страницу'); return; }
   showToast('Обработка PDF…');
   pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js';
+  // отрисовать страницу num в jpeg dataURL (targetW — целевая ширина в px)
+  const renderOne = (pdf, num, targetW) => pdf.getPage(num).then(page => {
+    const base = page.getViewport({ scale: 1 });
+    let scale = targetW / base.width;
+    const longest = Math.max(base.width, base.height) * scale;
+    if (longest > 4000) scale *= 4000 / longest; // защита памяти на больших листах
+    const vp = page.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(vp.width);
+    canvas.height = Math.round(vp.height);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    return page.render({ canvasContext: ctx, viewport: vp }).promise.then(() => {
+      const url = canvas.toDataURL('image/jpeg', 0.85);
+      canvas.width = canvas.height = 0; // освобождаем память сразу
+      return url;
+    });
+  });
   const reader = new FileReader();
   reader.onload = () => {
     const buf = new Uint8Array(reader.result);
-    pdfjsLib.getDocument({ data: buf }).promise
-      .then(pdf => pdf.getPage(1))
-      .then(page => {
-        const base = page.getViewport({ scale: 1 });
-        const TARGET_W = 3000;                       // высокое разрешение под зум до 600%
-        let scale = TARGET_W / base.width;
-        const longest = Math.max(base.width, base.height) * scale;
-        if (longest > 4000) scale *= 4000 / longest; // защита памяти на больших листах
-        const vp = page.getViewport({ scale });
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.round(vp.width);
-        canvas.height = Math.round(vp.height);
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = '#fff';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        return page.render({ canvasContext: ctx, viewport: vp }).promise.then(() => canvas);
-      })
-      .then(canvas => savePlanDataUrl(objId, canvas.toDataURL('image/jpeg', 0.85)))
-      .catch(err => { console.error('pdf render:', err); showToast('Не удалось открыть PDF'); });
+    pdfjsLib.getDocument({ data: buf }).promise.then(pdf => {
+      const total = pdf.numPages;
+      // одностраничный, или замена картинки (split=false) — как раньше, в активный чертёж
+      if (!split || total <= 1) {
+        return renderOne(pdf, 1, 3000).then(url => savePlanDataUrl(objId, url));
+      }
+      // многостраничный: раскладываем по листам последовательно (бережём память телефона)
+      showToast(`PDF: ${total} лист. — раскладываю…`);
+      let chain = Promise.resolve();
+      for (let k = 1; k <= total; k++) {
+        const num = k;
+        chain = chain
+          .then(() => renderOne(pdf, num, 2400))
+          .then(url => savePageAsDrawing(objId, num, url));
+      }
+      return chain.then(() => { renderPlanBox(objId); showToast(`✅ Загружено листов: ${total}`); });
+    }).catch(err => { console.error('pdf render:', err); showToast('Не удалось открыть PDF'); });
   };
   reader.onerror = () => showToast('Не удалось прочитать файл');
   reader.readAsArrayBuffer(file);
+}
+
+// Сохранить страницу многостраничного PDF как отдельный чертёж «Лист N».
+// Лист 1 кладём в уже созданный (активный) чертёж, остальные — новые вкладки.
+function savePageAsDrawing(objId, pageNum, dataUrl) {
+  const name = 'Лист ' + pageNum;
+  let did;
+  if (pageNum === 1) {
+    did = activeDid(objId);
+    const d = state.drawings.find(x => x.id === did);
+    if (d) d.name = name;
+  } else {
+    did = 'dr' + Date.now() + pageNum;
+    state.drawings.push({ id: did, objectId: objId, name, ts: Date.now() + pageNum });
+  }
+  planCache[did] = dataUrl;
+  const obj = state.objects.find(o => o.id === objId);
+  if (obj) obj.hasPlan = true;
+  saveLocal();
+  return fetch(`${API_URL}/api/drawings/save`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
+    body: JSON.stringify({ id: did, objectId: objId, name, image: dataUrl }),
+  }).then(r => { if (!r.ok) showToast('Лист ' + pageNum + ': большой файл или ошибка сети'); })
+    .catch(() => showToast('Лист ' + pageNum + ': не загрузился'));
 }
 
 // Сохранение картинки в активный чертёж (картинка или отрендеренный PDF)
