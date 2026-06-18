@@ -438,6 +438,14 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   </div>
 </div>
 
+<!-- Pick shleyf for a freshly drawn line -->
+<div class="modal-overlay" id="segShleyfPickModal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div id="segShleyfPickContent"></div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="deviceDetailModal">
   <div class="modal">
     <div class="modal-handle"></div>
@@ -1155,6 +1163,8 @@ let drawingSegObjId = null;
 let segPoints = [];
 const SEG_COLORS = { done:'var(--green)', wip:'#e8841a', problem:'var(--red)' };
 const SEG_STATUS = { done:'Проложено', wip:'В работе', problem:'Проблема' };
+// цвет линии, привязанной к шлейфу — по статусу шлейфа (todo/wip/done)
+const SHLEYF_LINE_COLORS = { todo:'#9aa0a6', wip:'#e8841a', done:'var(--green)' };
 const DEV_COLORS = { todo:'#9aa0a6', done:'var(--green)', problem:'var(--red)' };
 const DEV_STATUS = { todo:'Не поставлен', done:'Поставлен', problem:'Проблема' };
 let placingDeviceShleyfId = null;
@@ -1269,6 +1279,30 @@ function showShleyfDetail(id) {
 
     ${isEngineer() ? `<button class="btn btn-secondary btn-sm" style="margin-bottom:14px" onclick="startPlacing('${id}')">📍 ${typeof s.pinX === 'number' ? 'Передвинуть метку на плане' : 'Поставить на план'}</button>` : ''}
     <button class="btn btn-secondary btn-sm" style="margin-bottom:14px" onclick="startPlacingDevice('${id}')">🔘 Приборы шлейфа на плане (${devicesForShleyf(id).length})</button>
+
+    ${(() => {
+      const segs = segmentsForShleyf(id);
+      if (!segs.length) return '';
+      return `<div class="card-title">Линии на плане (${segs.length})</div>
+        <div style="margin-bottom:14px">${segs.map((sg, i) => `
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px;padding:6px 0;border-bottom:1px solid var(--border)">
+            <span style="color:var(--text2)">📏 Линия ${i + 1}${sg.drawingId ? ' · ' + drawingName(sg.drawingId) : ''}</span>
+            <button class="btn btn-danger btn-sm" onclick="deleteSegmentFromShleyf('${sg.id}','${id}')">×</button>
+          </div>`).join('')}</div>`;
+    })()}
+
+    ${(() => {
+      const devs = devicesForShleyf(id);
+      if (!devs.length) return '';
+      return `<div class="card-title">Приборы (${devs.length})</div>
+        <div style="margin-bottom:14px">${devs.map(d => {
+          const dc = DEV_COLORS[d.status] || DEV_COLORS.todo;
+          return `<div onclick="openDevice('${d.id}')" style="display:flex;align-items:center;gap:8px;font-size:13px;padding:6px 0;border-bottom:1px solid var(--border);cursor:pointer">
+            <span style="min-width:20px;height:20px;border-radius:10px;background:${dc};color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">${d.num || ''}</span>
+            <span style="color:var(--text2)">${DEV_STATUS[d.status] || ''}${d.note ? ' · ' + d.note : ''}</span>
+          </div>`;
+        }).join('')}</div>`;
+    })()}
 
     <div class="card-title">Статус</div>
     <div style="display:flex;gap:6px;margin-bottom:14px">
@@ -1467,7 +1501,10 @@ function snapAngle(px, py, x, y) {
 function segOverlaySvg(objId) {
   const W = 2.4; // толщина линии в пикселях — постоянная, не зависит от формы плана и зума
   const lines = segmentsForObject(objId).map(s => {
-    const col = SEG_COLORS[s.status] || SEG_COLORS.done;
+    // линия, привязанная к шлейфу, красится по статусу шлейфа; «ничья» — по своему статусу
+    const sh = s.shleyfId ? state.shleyfy.find(z => z.id === s.shleyfId) : null;
+    const col = sh ? (SHLEYF_LINE_COLORS[sh.status] || SHLEYF_LINE_COLORS.todo)
+                   : (SEG_COLORS[s.status] || SEG_COLORS.done);
     const d = linePath(segPts(s));
     // тёмная подложка (для читаемости на любом фоне) + сама цветная линия поверх
     return `<path d="${d}" fill="none" stroke="rgba(0,0,0,.5)" stroke-width="${W+1.6}" stroke-linecap="round" stroke-linejoin="miter" stroke-miterlimit="6" vector-effect="non-scaling-stroke"></path>`
@@ -1566,7 +1603,15 @@ function planClick(ev, objId) {
       if (d < bestD) { bestD = d; best = s; }
     }
   }
-  if (best) openSegment(best.id);
+  if (best) openSegOrShleyf(best);
+}
+// тап по линии: привязана к существующему шлейфу — открываем шлейф; иначе обычное окно участка
+function openSegOrShleyf(s) {
+  if (s.shleyfId) {
+    const sh = state.shleyfy.find(z => z.id === s.shleyfId);
+    if (sh) { showShleyfDetail(s.shleyfId); return; }
+  }
+  openSegment(s.id);
 }
 // ─── План на весь экран (зум + прокрутка) ───
 function openPlanViewer(objId) {
@@ -1627,6 +1672,7 @@ function startPlacing(id) {
 
 // ─── Участки на плане (рисование двумя тапами) ───
 function segmentsForObject(objId) { const did = activeDid(objId); return state.planSegments.filter(s => s.objectId === objId && (s.drawingId || s.objectId) === did); }
+function segmentsForShleyf(shId) { return state.planSegments.filter(s => s.shleyfId === shId); }
 function pointDistToSeg(px, py, x1, y1, x2, y2) {
   const dx = x2 - x1, dy = y2 - y1;
   const len2 = dx * dx + dy * dy;
@@ -1645,20 +1691,64 @@ function undoSegPoint(objId) {
   segPoints.pop();
   refreshPlan(objId);
 }
+// линию нарисовали — пока не сохраняем, а спрашиваем, к какому шлейфу её отнести
+let pendingSeg = null; // { objId, drawingId, points }
 function finishSegLine(objId) {
   if (segPoints.length < 2) { showToast('Нужно минимум 2 точки'); return; }
-  const pts = segPoints.slice();
+  pendingSeg = { objId, drawingId: activeDid(objId), points: segPoints.slice() };
+  drawingSegObjId = null; segPoints = [];
+  refreshPlan(objId);
+  openSegShleyfPicker();
+}
+function openSegShleyfPicker() {
+  if (!pendingSeg) return;
+  const objId = pendingSeg.objId;
+  const eng = isEngineer();
+  const list = shleyfyForObject(objId);
+  const rows = list.map(s => {
+    const col = SHLEYF_COLORS[s.status] || SHLEYF_COLORS.todo;
+    return `<button class="btn btn-secondary" style="text-align:left;margin-bottom:6px;display:flex;align-items:center;gap:8px;width:100%" onclick="attachSegToShleyf('${s.id}')">
+      <span style="width:11px;height:11px;border-radius:50%;background:${col};flex-shrink:0"></span>
+      <span>🧵 ${s.name}<span style="color:var(--text3);font-weight:400"> · ${s.system||''}</span></span>
+    </button>`;
+  }).join('');
+  document.getElementById('segShleyfPickContent').innerHTML = `
+    <div class="modal-title" style="margin-bottom:4px">К какому шлейфу линия?</div>
+    <div style="font-size:13px;color:var(--text3);margin-bottom:14px">Линия будет принадлежать шлейфу и краситься по его статусу.</div>
+    ${eng ? `<button class="btn btn-primary" style="margin-bottom:12px" onclick="attachSegToShleyf('__new__')">➕ Новый шлейф</button>` : ''}
+    ${list.length ? `<div class="card-title">Существующие шлейфы</div>${rows}` : `<div style="font-size:13px;color:var(--text3);margin-bottom:8px">Шлейфов пока нет.</div>`}
+    <button class="btn btn-secondary" style="margin-top:6px;width:100%" onclick="attachSegToShleyf('')">Без шлейфа (просто линия)</button>
+    <button class="btn btn-danger btn-sm" style="margin-top:10px" onclick="cancelSegPick()">Отменить линию</button>
+  `;
+  showModal('segShleyfPickModal');
+}
+function attachSegToShleyf(shId) {
+  if (!pendingSeg) { closeModal('segShleyfPickModal'); return; }
+  const { objId, drawingId, points } = pendingSeg;
+  let shleyfId = shId || null;
+  if (shId === '__new__') {
+    if (!isEngineer()) { showToast('Новый шлейф создаёт инженер'); return; }
+    const n = shleyfyForObject(objId).length + 1;
+    shleyfId = 's' + Date.now();
+    state.shleyfy.push({ id: shleyfId, objectId: objId, name: 'Шлейф ' + n, system: '', planCable: 0, planDevices: 0, doneCable: 0, doneDevices: 0, status: 'todo', assignedTo: '', ts: Date.now() });
+    syncShleyfy();
+  }
   const seg = {
-    id: 'seg' + Date.now(), objectId: objId, drawingId: activeDid(objId),
-    points: pts,
-    x1: pts[0].x, y1: pts[0].y, x2: pts[pts.length - 1].x, y2: pts[pts.length - 1].y,
+    id: 'seg' + Date.now(), objectId: objId, drawingId, shleyfId,
+    points,
+    x1: points[0].x, y1: points[0].y, x2: points[points.length - 1].x, y2: points[points.length - 1].y,
     status: 'done', note: '', author: myName(), ts: Date.now()
   };
   state.planSegments.push(seg);
   saveLocal(); pushSegment(seg);
-  segPoints = [];
+  pendingSeg = null;
+  closeModal('segShleyfPickModal');
   refreshPlan(objId);
-  showToast('✅ Линия добавлена');
+  showToast(shleyfId ? '✅ Линия привязана к шлейфу' : '✅ Линия добавлена');
+}
+function cancelSegPick() {
+  pendingSeg = null;
+  closeModal('segShleyfPickModal');
 }
 function stopDrawingSeg(objId) {
   // если линия начата (>=2 точек) — сохраним, чтобы работа не пропала
@@ -1670,7 +1760,7 @@ function pushSegment(seg) {
   fetch(`${API_URL}/api/segments/save`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
-    body: JSON.stringify({ id: seg.id, objectId: seg.objectId, drawingId: seg.drawingId || null, points: seg.points || null, x1: seg.x1, y1: seg.y1, x2: seg.x2, y2: seg.y2, status: seg.status, note: seg.note || '', ts: seg.ts }),
+    body: JSON.stringify({ id: seg.id, objectId: seg.objectId, drawingId: seg.drawingId || null, shleyfId: seg.shleyfId || null, points: seg.points || null, x1: seg.x1, y1: seg.y1, x2: seg.x2, y2: seg.y2, status: seg.status, note: seg.note || '', ts: seg.ts }),
   }).catch(() => {});
 }
 function openSegment(id) {
@@ -1724,6 +1814,23 @@ function deleteSegment(id) {
   closeModal('segDetailModal');
   if (obj) refreshPlan(obj);
   showToast('Удалён');
+}
+// удалить линию из окна шлейфа (и обновить это окно)
+function deleteSegmentFromShleyf(segId, shId) {
+  if (!confirm('Удалить линию шлейфа?')) return;
+  const s = state.planSegments.find(x => x.id === segId);
+  const obj = s ? s.objectId : null;
+  state.planSegments = state.planSegments.filter(x => x.id !== segId);
+  saveLocal();
+  if (state.isOnline && state.user?.token) {
+    fetch(`${API_URL}/api/segments/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
+      body: JSON.stringify({ id: segId }),
+    }).catch(() => {});
+  }
+  if (obj) refreshPlan(obj);
+  showShleyfDetail(shId);
 }
 
 // ─── Приборы шлейфа на плане ───
