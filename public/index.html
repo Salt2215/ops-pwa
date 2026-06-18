@@ -1516,7 +1516,7 @@ function segOverlaySvg(objId) {
     if (segPoints.length >= 2) {
       temp += `<path d="${linePath(segPoints)}" fill="none" stroke="#e8841a" stroke-width="${W}" stroke-dasharray="4 3" stroke-linecap="round" stroke-linejoin="miter" stroke-miterlimit="6" vector-effect="non-scaling-stroke"></path>`;
     }
-    temp += segPoints.map(p => `<circle cx="${p.x}" cy="${p.y}" r="2" fill="#e8841a" stroke="#fff" stroke-width="2" vector-effect="non-scaling-stroke"></circle>`).join('');
+    temp += segPoints.map(p => `<circle cx="${p.x}" cy="${p.y}" r="1" fill="none" stroke="#e8841a" stroke-width="1.2" stroke-opacity=".85" vector-effect="non-scaling-stroke"></circle>`).join('');
   }
   return `<svg viewBox="0 0 100 100" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none">${lines}${temp}</svg>`;
 }
