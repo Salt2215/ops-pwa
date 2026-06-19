@@ -501,7 +501,7 @@ function visibleObjects() {
 window.addEventListener('online',  () => { state.isOnline = true;  updateOfflineBanner(); syncAll(); });
 window.addEventListener('offline', () => { state.isOnline = false; updateOfflineBanner(); });
 
-const APP_VERSION = 'v25'; // видимая метка версии — должна совпадать с кэшем в sw.js
+const APP_VERSION = 'v26'; // видимая метка версии — должна совпадать с кэшем в sw.js
 function updateOfflineBanner() {
   const banner = document.getElementById('offlineBanner');
   banner.classList.toggle('show', !state.isOnline);
@@ -1491,15 +1491,17 @@ function snapAngle(px, py, x, y) {
 }
 function segOverlaySvg(objId) {
   const W = 2.4; // толщина линии в пикселях — постоянная, не зависит от формы плана и зума
+  const LINE_OP = 0.5;   // прозрачность линии (0 — невидима, 1 — сплошная); меньше = лучше видно чертёж
+  const HALO_OP = 0.28;  // прозрачность тёмной подложки под линией (для контраста на пёстром плане)
   const lines = segmentsForObject(objId).map(s => {
     // линия, привязанная к шлейфу, красится по статусу шлейфа; «ничья» — по своему статусу
     const sh = s.shleyfId ? state.shleyfy.find(z => z.id === s.shleyfId) : null;
     const col = sh ? (SHLEYF_LINE_COLORS[sh.status] || SHLEYF_LINE_COLORS.todo)
                    : (SEG_COLORS[s.status] || SEG_COLORS.done);
     const d = linePath(segPts(s));
-    // тёмная подложка (для читаемости на любом фоне) + сама цветная линия поверх
-    return `<path d="${d}" fill="none" stroke="rgba(0,0,0,.5)" stroke-width="${W+1.6}" stroke-linecap="round" stroke-linejoin="miter" stroke-miterlimit="6" vector-effect="non-scaling-stroke"></path>`
-         + `<path d="${d}" fill="none" stroke="${col}" stroke-width="${W}" stroke-linecap="round" stroke-linejoin="miter" stroke-miterlimit="6" vector-effect="non-scaling-stroke"></path>`;
+    // лёгкая тёмная подложка (чуть-чуть, для читаемости) + полупрозрачная цветная линия поверх — чертёж виден сквозь неё
+    return `<path d="${d}" fill="none" stroke="rgba(0,0,0,${HALO_OP})" stroke-width="${W+1}" stroke-linecap="round" stroke-linejoin="miter" stroke-miterlimit="6" vector-effect="non-scaling-stroke"></path>`
+         + `<path d="${d}" fill="none" stroke="${col}" stroke-opacity="${LINE_OP}" stroke-width="${W}" stroke-linecap="round" stroke-linejoin="miter" stroke-miterlimit="6" vector-effect="non-scaling-stroke"></path>`;
   }).join('');
   // линия, которую сейчас рисуем: предпросмотр кривой + точки-узлы
   let temp = '';
