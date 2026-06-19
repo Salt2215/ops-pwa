@@ -167,6 +167,7 @@ async function initDB() {
     ALTER TABLE pwa_segments ADD COLUMN IF NOT EXISTS drawing_id TEXT;
     ALTER TABLE pwa_segments ADD COLUMN IF NOT EXISTS shleyf_id TEXT;
     ALTER TABLE pwa_devices  ADD COLUMN IF NOT EXISTS drawing_id TEXT;
+    ALTER TABLE pwa_devices  ADD COLUMN IF NOT EXISTS type TEXT;
     ALTER TABLE pwa_shleyfy  ADD COLUMN IF NOT EXISTS pin_drawing_id TEXT;
     INSERT INTO pwa_drawings (id, object_id, name, image, ts)
       SELECT object_id, object_id, 'Чертёж 1', image, (extract(epoch from now())*1000)::bigint
@@ -303,7 +304,7 @@ app.get('/api/sync', auth, async (req, res) => {
     }));
     const normDev = devRows.map(d => ({
       id: d.id, objectId: d.object_id, shleyfId: d.shleyf_id, drawingId: d.drawing_id || null,
-      num: d.num, x: d.x, y: d.y,
+      num: d.num, type: d.type || 'smoke', x: d.x, y: d.y,
       status: d.status, note: d.note || '', author: d.author_name || '', ts: d.ts
     }));
     const normDraw = drawRows.map(d => ({ id: d.id, objectId: d.object_id, name: d.name || 'Чертёж', ts: d.ts }));
@@ -573,7 +574,7 @@ app.post('/api/segments/delete', auth, async (req, res) => {
 
 app.post('/api/devices/save', auth, async (req, res) => {
   try {
-    const { id, objectId, shleyfId, drawingId, num, x, y, status, note, ts } = req.body;
+    const { id, objectId, shleyfId, drawingId, num, type, x, y, status, note, ts } = req.body;
     if (!id || !objectId) return res.status(400).json({ error: 'no data' });
     if (!isEngineer(req.user)) {
       const o = await pool.query('SELECT assigned_to FROM pwa_objects WHERE id=$1', [objectId]);
@@ -584,10 +585,10 @@ app.post('/api/devices/save', auth, async (req, res) => {
     const px = Math.max(0, Math.min(100, +x || 0));
     const py = Math.max(0, Math.min(100, +y || 0));
     await pool.query(
-      `INSERT INTO pwa_devices (id,object_id,shleyf_id,num,x,y,status,note,author_name,ts,drawing_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-       ON CONFLICT (id) DO UPDATE SET shleyf_id=$3,num=$4,x=$5,y=$6,status=$7,note=$8,drawing_id=$11`,
-      [id, objectId, shleyfId || null, parseInt(num) || 0, px, py, st, note || '', req.user.name, ts || Date.now(), drawingId || null]
+      `INSERT INTO pwa_devices (id,object_id,shleyf_id,num,x,y,status,note,author_name,ts,drawing_id,type)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       ON CONFLICT (id) DO UPDATE SET shleyf_id=$3,num=$4,x=$5,y=$6,status=$7,note=$8,drawing_id=$11,type=$12`,
+      [id, objectId, shleyfId || null, parseInt(num) || 0, px, py, st, note || '', req.user.name, ts || Date.now(), drawingId || null, type || 'smoke']
     );
     res.json({ ok: true });
   } catch (e) {
