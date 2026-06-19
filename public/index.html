@@ -501,12 +501,13 @@ function visibleObjects() {
 window.addEventListener('online',  () => { state.isOnline = true;  updateOfflineBanner(); syncAll(); });
 window.addEventListener('offline', () => { state.isOnline = false; updateOfflineBanner(); });
 
+const APP_VERSION = 'v25'; // видимая метка версии — должна совпадать с кэшем в sw.js
 function updateOfflineBanner() {
   const banner = document.getElementById('offlineBanner');
   banner.classList.toggle('show', !state.isOnline);
-  document.getElementById('headerSub').textContent = state.isOnline
+  document.getElementById('headerSub').textContent = (state.isOnline
     ? (isEngineer() ? '👑 Инженер' : 'Монтажник')
-    : 'Офлайн — данные сохраняются';
+    : 'Офлайн — данные сохраняются') + ' · ' + APP_VERSION;
 }
 
 // ─── Navigation ───
@@ -1440,19 +1441,8 @@ function setActiveDrawing(objId, did) {
 function addDrawing(objId) {
   if (!isEngineer()) return;
   if (!state.isOnline || !state.user?.token) { showToast('Добавить чертёж — только онлайн'); return; }
-  const n = drawingsForObject(objId).length + 1;
-  const name = (prompt('Название чертежа:', 'Чертёж ' + n) || '').trim() || ('Чертёж ' + n);
-  const did = 'dr' + Date.now();
-  state.drawings.push({ id: did, objectId: objId, name, ts: Date.now() });
-  saveLocal();
-  fetch(`${API_URL}/api/drawings/save`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
-    body: JSON.stringify({ id: did, objectId: objId, name, ts: Date.now() }),
-  }).catch(() => {});
-  activeDrawing[objId] = did;
-  renderPlanBox(objId);
-  triggerPlanUpload(objId, true); // сразу предложим выбрать файл; многостраничный PDF разложим по листам
+  // НЕ создаём пустой чертёж заранее — он появится, только когда выберут файл (иначе плодятся пустышки)
+  triggerPlanUpload(objId, true);
 }
 function renameDrawing(objId) {
   if (!isEngineer()) return;
@@ -1921,9 +1911,12 @@ function deleteDevice(id) {
   showToast('Удалён');
 }
 function planEmptyHtml(objId, eng) {
-  return eng
-    ? `<button class="btn btn-secondary btn-sm" onclick="addDrawing('${objId}')">📄 Добавить чертёж (PDF или фото)</button>`
-    : `<div style="font-size:13px;color:var(--text3)">Чертёж пока не загружен.</div>`;
+  if (!eng) return `<div style="font-size:13px;color:var(--text3)">Чертёж пока не загружен.</div>`;
+  const hasActive = !!activeDid(objId); // есть активный, но пустой чертёж (картинка не загружена)
+  return `<button class="btn btn-secondary btn-sm" onclick="addDrawing('${objId}')">📄 Добавить чертёж (PDF или фото)</button>`
+    + (hasActive ? `
+      <button class="btn btn-secondary btn-sm" style="margin-top:6px" onclick="triggerPlanUpload('${objId}', false)">⬆️ Загрузить картинку в этот чертёж</button>
+      <button class="btn btn-danger btn-sm" style="margin-top:6px" onclick="deletePlan('${objId}')">🗑 Удалить пустой чертёж</button>` : '');
 }
 function triggerPlanUpload(objId, split) {
   if (!isEngineer()) return;
@@ -1954,7 +1947,14 @@ function handlePlanFile(ev) {
       const ctx = canvas.getContext('2d');
       ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);
       ctx.drawImage(img, 0, 0, w, h);
-      savePlanDataUrl(objId, canvas.toDataURL('image/jpeg', 0.82));
+      const url = canvas.toDataURL('image/jpeg', 0.82);
+      if (split) {
+        // «Добавить чертёж» — создаём новый чертёж только сейчас, когда файл выбран
+        const n = drawingsForObject(objId).length + 1;
+        addPageDrawing(objId, 'Чертёж ' + n, url, true, Date.now()).then(() => renderPlanBox(objId));
+      } else {
+        savePlanDataUrl(objId, url); // «Заменить картинку» — в текущий чертёж
+      }
     };
     img.src = reader.result;
   };
@@ -1991,18 +1991,26 @@ function renderPdfPlan(file, objId, split) {
     const buf = new Uint8Array(reader.result);
     pdfjsLib.getDocument({ data: buf }).promise.then(pdf => {
       const total = pdf.numPages;
-      // одностраничный, или замена картинки (split=false) — как раньше, в активный чертёж
-      if (!split || total <= 1) {
+      // РЕЖИМ ЗАМЕНЫ (split=false): только 1-я страница в активный чертёж
+      if (!split) {
         return renderOne(pdf, 1, 3000).then(url => savePlanDataUrl(objId, url));
       }
-      // многостраничный: раскладываем по листам последовательно (бережём память телефона)
+      // РЕЖИМ ДОБАВЛЕНИЯ, одна страница → один новый чертёж «Чертёж N»
+      if (total <= 1) {
+        const n = drawingsForObject(objId).length + 1;
+        return renderOne(pdf, 1, 3000)
+          .then(url => addPageDrawing(objId, 'Чертёж ' + n, url, true, Date.now()))
+          .then(() => renderPlanBox(objId));
+      }
+      // РЕЖИМ ДОБАВЛЕНИЯ, многостраничный → отдельный чертёж на каждый лист
       showToast(`PDF: ${total} лист. — раскладываю…`);
+      const baseTs = Date.now();
       let chain = Promise.resolve();
       for (let k = 1; k <= total; k++) {
         const num = k;
         chain = chain
           .then(() => renderOne(pdf, num, 2400))
-          .then(url => savePageAsDrawing(objId, num, url));
+          .then(url => addPageDrawing(objId, 'Лист ' + num, url, num === 1, baseTs + num));
       }
       return chain.then(() => { renderPlanBox(objId); showToast(`✅ Загружено листов: ${total}`); });
     }).catch(err => { console.error('pdf render:', err); showToast('Не удалось открыть PDF'); });
@@ -2011,20 +2019,13 @@ function renderPdfPlan(file, objId, split) {
   reader.readAsArrayBuffer(file);
 }
 
-// Сохранить страницу многостраничного PDF как отдельный чертёж «Лист N».
-// Лист 1 кладём в уже созданный (активный) чертёж, остальные — новые вкладки.
-function savePageAsDrawing(objId, pageNum, dataUrl) {
-  const name = 'Лист ' + pageNum;
-  let did;
-  if (pageNum === 1) {
-    did = activeDid(objId);
-    const d = state.drawings.find(x => x.id === did);
-    if (d) d.name = name;
-  } else {
-    did = 'dr' + Date.now() + pageNum;
-    state.drawings.push({ id: did, objectId: objId, name, ts: Date.now() + pageNum });
-  }
+// Создать НОВЫЙ чертёж с картинкой (для «Добавить чертёж» и листов многостраничного PDF).
+// Чертёж появляется только здесь — когда картинка уже готова, так пустышки не плодятся.
+function addPageDrawing(objId, name, dataUrl, makeActive, ts) {
+  const did = 'dr' + (ts || Date.now()) + Math.floor(Math.random() * 1000);
+  state.drawings.push({ id: did, objectId: objId, name, ts: ts || Date.now() });
   planCache[did] = dataUrl;
+  if (makeActive) activeDrawing[objId] = did;
   const obj = state.objects.find(o => o.id === objId);
   if (obj) obj.hasPlan = true;
   saveLocal();
@@ -2032,8 +2033,8 @@ function savePageAsDrawing(objId, pageNum, dataUrl) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
     body: JSON.stringify({ id: did, objectId: objId, name, image: dataUrl }),
-  }).then(r => { if (!r.ok) showToast('Лист ' + pageNum + ': большой файл или ошибка сети'); })
-    .catch(() => showToast('Лист ' + pageNum + ': не загрузился'));
+  }).then(r => { if (!r.ok) showToast(name + ': большой файл или ошибка сети'); })
+    .catch(() => showToast(name + ': не загрузился'));
 }
 
 // Сохранение картинки в активный чертёж (картинка или отрендеренный PDF)
