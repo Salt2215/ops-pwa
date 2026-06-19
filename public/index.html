@@ -509,7 +509,7 @@ function visibleObjects() {
 window.addEventListener('online',  () => { state.isOnline = true;  updateOfflineBanner(); syncAll(); });
 window.addEventListener('offline', () => { state.isOnline = false; updateOfflineBanner(); });
 
-const APP_VERSION = 'v27'; // видимая метка версии — должна совпадать с кэшем в sw.js
+const APP_VERSION = 'v28'; // видимая метка версии — должна совпадать с кэшем в sw.js
 function updateOfflineBanner() {
   const banner = document.getElementById('offlineBanner');
   banner.classList.toggle('show', !state.isOnline);
@@ -800,6 +800,19 @@ function showObjectDetail(id) {
     byWorker[n].count++;
   });
 
+  // сводка по разметке (шлейфы + приборы на плане)
+  const objShleyfy = shleyfyForObject(id);
+  const shTotal = objShleyfy.length;
+  const shDone = objShleyfy.filter(s => s.status === 'done').length;
+  const shWip = objShleyfy.filter(s => s.status === 'wip').length;
+  const objDevices = state.devices.filter(d => d.objectId === id);
+  const devTotal = objDevices.length;
+  const devDone = objDevices.filter(d => d.status === 'done').length;
+  const devProblem = objDevices.filter(d => d.status === 'problem').length;
+  const planCableSum = objShleyfy.reduce((a, x) => a + (x.planCable || 0), 0);
+  const doneCableSum = objShleyfy.reduce((a, x) => a + (x.doneCable || 0), 0);
+  const shPct = shTotal ? Math.round(shDone / shTotal * 100) : 0;
+
   document.getElementById('objectDetailContent').innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
       <div class="modal-title" style="margin:0">${obj.name}</div>
@@ -818,6 +831,22 @@ function showObjectDetail(id) {
       <div class="progress-label"><span>Прогресс кабеля</span><span>${totalCable}/${obj.planCable} м (${Math.round(totalCable/obj.planCable*100)}%)</span></div>
       <div class="progress-bar"><div class="progress-fill" style="width:${Math.min(totalCable/obj.planCable*100,100)}%"></div></div>
     </div>` : ''}
+
+    ${shTotal ? `
+    <div class="card-title">Сводка</div>
+    <div class="progress-wrap" style="margin-bottom:8px">
+      <div class="progress-label"><span>Шлейфы готовы</span><span>${shDone}/${shTotal} (${shPct}%)</span></div>
+      <div class="progress-bar"><div class="progress-fill" style="width:${shPct}%"></div></div>
+    </div>
+    <div class="stats-grid" style="margin-bottom:8px">
+      <div class="stat-card"><div class="stat-val">${devDone}/${devTotal}</div><div class="stat-lbl">Приборы поставлены</div></div>
+      <div class="stat-card"><div class="stat-val">${doneCableSum}${planCableSum ? '/' + planCableSum : ''}</div><div class="stat-lbl">Кабель, м</div></div>
+    </div>
+    ${(shWip || devProblem) ? `<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px;font-size:12px">
+      ${shWip ? `<span style="color:var(--yellow)">● в работе: ${shWip}</span>` : ''}
+      ${devProblem ? `<span style="color:var(--red)">⚠ проблемных приборов: ${devProblem}</span>` : ''}
+    </div>` : `<div style="margin-bottom:6px"></div>`}
+    ` : ''}
 
     <div class="card-title">План объекта</div>
     <div id="planBox" style="margin-bottom:14px"></div>
