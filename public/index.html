@@ -446,6 +446,14 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   </div>
 </div>
 
+<!-- Pick device type before placing -->
+<div class="modal-overlay" id="devTypePickModal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div id="devTypePickContent"></div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="deviceDetailModal">
   <div class="modal">
     <div class="modal-handle"></div>
@@ -501,7 +509,7 @@ function visibleObjects() {
 window.addEventListener('online',  () => { state.isOnline = true;  updateOfflineBanner(); syncAll(); });
 window.addEventListener('offline', () => { state.isOnline = false; updateOfflineBanner(); });
 
-const APP_VERSION = 'v26'; // видимая метка версии — должна совпадать с кэшем в sw.js
+const APP_VERSION = 'v27'; // видимая метка версии — должна совпадать с кэшем в sw.js
 function updateOfflineBanner() {
   const banner = document.getElementById('offlineBanner');
   banner.classList.toggle('show', !state.isOnline);
@@ -1169,7 +1177,34 @@ const SEG_STATUS = { done:'Проложено', wip:'В работе', problem:'
 const SHLEYF_LINE_COLORS = { todo:'#9aa0a6', wip:'#e8841a', done:'var(--green)' };
 const DEV_COLORS = { todo:'#9aa0a6', done:'var(--green)', problem:'var(--red)' };
 const DEV_STATUS = { todo:'Не поставлен', done:'Поставлен', problem:'Проблема' };
+// типы приборов: форма = тип, цвет = статус
+const DEV_TYPES = [
+  { id:'smoke',   short:'Дымовой',   name:'Дымовой извещатель',         shape:'circle' },
+  { id:'heat',    short:'Тепловой',  name:'Тепловой извещатель',        shape:'diamond' },
+  { id:'manual',  short:'ИПР',       name:'ИПР (ручной извещатель)',    shape:'square' },
+  { id:'sound',   short:'Свето-зв.', name:'Свето-звуковой оповещатель', shape:'triangle' },
+  { id:'speaker', short:'Динамик',   name:'Речевой оповещатель',        shape:'speaker' },
+  { id:'exit',    short:'Выход',     name:'Табличка «Выход»',           shape:'rect' },
+];
+const DEV_TYPE_BY_ID = {}; DEV_TYPES.forEach(t => DEV_TYPE_BY_ID[t.id] = t);
+function devType(id) { return DEV_TYPE_BY_ID[id] || DEV_TYPE_BY_ID.smoke; }
+// маркер прибора нужной формы (виден на ~22px), цвет = статус, номер внутри
+function deviceShapeSvg(shape, col, num) {
+  const s = 'rgba(0,0,0,.5)', w = 1.5;
+  let body, nx = 12, ny = 13;
+  switch (shape) {
+    case 'diamond':  body = `<polygon points="12,2 22,12 12,22 2,12" fill="${col}" stroke="${s}" stroke-width="${w}"/>`; break;
+    case 'square':   body = `<rect x="3" y="3" width="18" height="18" rx="3" fill="${col}" stroke="${s}" stroke-width="${w}"/>`; break;
+    case 'triangle': body = `<polygon points="12,3 22,21 2,21" fill="${col}" stroke="${s}" stroke-width="${w}"/>`; ny = 16; break;
+    case 'speaker':  body = `<path d="M3 9 h4 l6 -5 v16 l-6 -5 h-4 z" fill="${col}" stroke="${s}" stroke-width="${w}" stroke-linejoin="round"/><path d="M17 8 a6 6 0 0 1 0 8" fill="none" stroke="${col}" stroke-width="2"/>`; nx = 8; break;
+    case 'rect':     body = `<rect x="2" y="5" width="20" height="14" rx="2" fill="${col}" stroke="${s}" stroke-width="${w}"/>`; ny = 12; break;
+    case 'circle':
+    default:         body = `<circle cx="12" cy="12" r="10" fill="${col}" stroke="${s}" stroke-width="${w}"/>`; break;
+  }
+  return `<svg viewBox="0 0 24 24" width="100%" height="100%" style="overflow:visible">${body}<text x="${nx}" y="${ny}" text-anchor="middle" dominant-baseline="central" fill="#fff" font-size="12" font-weight="700">${num || ''}</text></svg>`;
+}
 let placingDeviceShleyfId = null;
+let placingDeviceType = 'smoke';
 let planCtx = 'box';
 let viewerZoom = 1;
 let currentViewerObj = null;
@@ -1280,7 +1315,7 @@ function showShleyfDetail(id) {
     <div style="font-size:13px;color:var(--text3);margin-bottom:14px">${s.system||''}</div>
 
     ${isEngineer() ? `<button class="btn btn-secondary btn-sm" style="margin-bottom:14px" onclick="startPlacing('${id}')">📍 ${typeof s.pinX === 'number' ? 'Передвинуть метку на плане' : 'Поставить на план'}</button>` : ''}
-    <button class="btn btn-secondary btn-sm" style="margin-bottom:14px" onclick="startPlacingDevice('${id}')">🔘 Приборы шлейфа на плане (${devicesForShleyf(id).length})</button>
+    <button class="btn btn-secondary btn-sm" style="margin-bottom:14px" onclick="chooseDeviceTypeForPlacing('${id}')">🔘 Приборы шлейфа на плане (${devicesForShleyf(id).length})</button>
 
     ${(() => {
       const segs = segmentsForShleyf(id);
@@ -1300,8 +1335,8 @@ function showShleyfDetail(id) {
         <div style="margin-bottom:14px">${devs.map(d => {
           const dc = DEV_COLORS[d.status] || DEV_COLORS.todo;
           return `<div onclick="openDevice('${d.id}')" style="display:flex;align-items:center;gap:8px;font-size:13px;padding:6px 0;border-bottom:1px solid var(--border);cursor:pointer">
-            <span style="min-width:20px;height:20px;border-radius:10px;background:${dc};color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">${d.num || ''}</span>
-            <span style="color:var(--text2)">${DEV_STATUS[d.status] || ''}${d.note ? ' · ' + d.note : ''}</span>
+            <span style="width:22px;height:22px;flex-shrink:0;display:inline-block">${deviceShapeSvg(devType(d.type).shape, dc, d.num)}</span>
+            <span style="color:var(--text2)">${devType(d.type).short} · ${DEV_STATUS[d.status] || ''}${d.note ? ' · ' + d.note : ''}</span>
           </div>`;
         }).join('')}</div>`;
     })()}
@@ -1530,7 +1565,7 @@ function planImgHtml(objId, eng) {
   const lock = placing || drawing || !!placingDevSh;
   return `
     ${placing ? `<div style="font-size:13px;color:var(--yellow);margin-bottom:6px">Тапните на плане, куда поставить метку. <a onclick="cancelPlacing('${objId}')" style="color:var(--text2);text-decoration:underline;cursor:pointer">Отмена</a></div>` : ''}
-    ${placingDevSh ? `<div style="font-size:13px;color:var(--green);margin-bottom:6px">Ставьте приборы шлейфа «${placingDevSh.name}» — тап = прибор. <a onclick="stopPlacingDevice('${objId}')" style="color:var(--text2);text-decoration:underline;cursor:pointer">Готово</a></div>` : ''}
+    ${placingDevSh ? `<div style="font-size:13px;color:var(--green);margin-bottom:6px">Ставим: <b>${devType(placingDeviceType).name}</b> — тап = прибор. <a onclick="chooseDeviceTypeForPlacing('${placingDevSh.id}')" style="color:var(--text2);text-decoration:underline;cursor:pointer">сменить тип</a> · <a onclick="stopPlacingDevice('${objId}')" style="color:var(--text2);text-decoration:underline;cursor:pointer">Готово</a></div>` : ''}
     ${drawing ? `<div style="font-size:13px;color:#e8841a;margin-bottom:6px">Тапайте точки линии по очереди (точек: ${segPoints.length}).<br>
       <a onclick="finishSegLine('${objId}')" style="color:var(--green);text-decoration:underline;cursor:pointer">✓ Завершить линию</a> · 
       <a onclick="undoSegPoint('${objId}')" style="color:var(--text2);text-decoration:underline;cursor:pointer">⌫ убрать точку</a> · 
@@ -1832,24 +1867,39 @@ function devicesForShleyf(shId) { return state.devices.filter(d => d.shleyfId ==
 function devicesOverlayHtml(objId, lock) {
   return devicesForObject(objId).map(d => {
     const col = DEV_COLORS[d.status] || DEV_COLORS.todo;
-    return `<div onclick="event.stopPropagation();openDevice('${d.id}')" title="Прибор ${d.num||''}"
-      style="position:absolute;left:${d.x}%;top:${d.y}%;transform:translate(-50%,-50%);min-width:18px;height:18px;padding:0 3px;border-radius:9px;background:${col};border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.6);color:#fff;font-size:11px;font-weight:700;line-height:1;text-align:center;display:flex;align-items:center;justify-content:center;cursor:pointer;pointer-events:${lock?'none':'auto'}">${d.num||''}</div>`;
+    const shape = devType(d.type).shape;
+    return `<div onclick="event.stopPropagation();openDevice('${d.id}')" title="${devType(d.type).short} ${d.num||''}"
+      style="position:absolute;left:${d.x}%;top:${d.y}%;transform:translate(-50%,-50%);width:22px;height:22px;filter:drop-shadow(0 1px 3px rgba(0,0,0,.7));cursor:pointer;pointer-events:${lock?'none':'auto'}">${deviceShapeSvg(shape, col, d.num)}</div>`;
   }).join('');
 }
-function startPlacingDevice(shId) {
+// выбор типа прибора, потом — режим постановки
+function chooseDeviceTypeForPlacing(shId) {
   if (!state.isOnline || !state.user?.token) { showToast('Ставить приборы — только онлайн'); return; }
   const sh = state.shleyfy.find(x => x.id === shId);
   if (!sh) return;
   if (!activeDid(sh.objectId)) { showToast('Сначала добавьте чертёж объекта'); return; }
-  placingDeviceShleyfId = shId; placingShleyfId = null; drawingSegObjId = null;
-  closeModal('shleyfDetailModal');
+  const btns = DEV_TYPES.map(t => `<button class="btn btn-secondary" style="display:flex;align-items:center;gap:10px;text-align:left;margin-bottom:6px;width:100%" onclick="beginPlacingDevice('${shId}','${t.id}')">
+    <span style="width:22px;height:22px;flex-shrink:0;display:inline-block">${deviceShapeSvg(t.shape, '#7d8794', '')}</span>
+    <span>${t.name}</span></button>`).join('');
+  document.getElementById('devTypePickContent').innerHTML = `
+    <div class="modal-title" style="margin-bottom:4px">Какой прибор ставим?</div>
+    <div style="font-size:13px;color:var(--text3);margin-bottom:14px">Выбери тип — потом тапай по плану, ставь сколько нужно. Тип можно сменить в любой момент.</div>
+    ${btns}
+    <button class="btn btn-secondary btn-sm" style="margin-top:8px" onclick="closeModal('devTypePickModal')">Отмена</button>`;
+  showModal('devTypePickModal');
+}
+function beginPlacingDevice(shId, typeId) {
+  const sh = state.shleyfy.find(x => x.id === shId);
+  if (!sh) return;
+  placingDeviceShleyfId = shId; placingDeviceType = typeId || 'smoke'; placingShleyfId = null; drawingSegObjId = null;
+  closeModal('devTypePickModal'); closeModal('shleyfDetailModal');
   showObjectDetail(sh.objectId);
   showToast('Тапайте приборы на плане');
 }
 function addDeviceAt(sh, x, y) {
   const nums = devicesForShleyf(sh.id).map(d => d.num || 0);
   const num = (nums.length ? Math.max.apply(null, nums) : 0) + 1;
-  const dev = { id: 'dev' + Date.now() + Math.floor(Math.random()*1000), objectId: sh.objectId, shleyfId: sh.id, drawingId: activeDid(sh.objectId), num, x: +x.toFixed(2), y: +y.toFixed(2), status: 'todo', note: '', author: myName(), ts: Date.now() };
+  const dev = { id: 'dev' + Date.now() + Math.floor(Math.random()*1000), objectId: sh.objectId, shleyfId: sh.id, drawingId: activeDid(sh.objectId), num, type: placingDeviceType || 'smoke', x: +x.toFixed(2), y: +y.toFixed(2), status: 'todo', note: '', author: myName(), ts: Date.now() };
   state.devices.push(dev);
   saveLocal(); pushDevice(dev);
 }
@@ -1858,7 +1908,7 @@ function pushDevice(d) {
   fetch(`${API_URL}/api/devices/save`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
-    body: JSON.stringify({ id: d.id, objectId: d.objectId, shleyfId: d.shleyfId, drawingId: d.drawingId || null, num: d.num, x: d.x, y: d.y, status: d.status, note: d.note || '', ts: d.ts }),
+    body: JSON.stringify({ id: d.id, objectId: d.objectId, shleyfId: d.shleyfId, drawingId: d.drawingId || null, num: d.num, type: d.type || 'smoke', x: d.x, y: d.y, status: d.status, note: d.note || '', ts: d.ts }),
   }).catch(() => {});
 }
 function openDevice(id) {
@@ -1867,7 +1917,11 @@ function openDevice(id) {
   const sh = state.shleyfy.find(x => x.id === d.shleyfId);
   document.getElementById('deviceDetailContent').innerHTML = `
     <div class="modal-title" style="margin-bottom:2px">Прибор №${d.num||''}</div>
-    <div style="font-size:13px;color:var(--text3);margin-bottom:14px">${sh ? '🧵 ' + sh.name : 'шлейф удалён'}${d.author ? ' · ' + d.author : ''}</div>
+    <div style="font-size:13px;color:var(--text3);margin-bottom:14px">${devType(d.type).name}${sh ? ' · 🧵 ' + sh.name : ' · шлейф удалён'}</div>
+    <div class="card-title">Тип прибора</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
+      ${DEV_TYPES.map(t => `<button class="btn btn-sm ${(d.type||'smoke')===t.id?'btn-primary':'btn-secondary'}" style="display:flex;align-items:center;gap:5px" onclick="setDeviceType('${id}','${t.id}')"><span style="width:16px;height:16px;display:inline-block">${deviceShapeSvg(t.shape, '#7d8794', '')}</span>${t.short}</button>`).join('')}
+    </div>
     <div class="card-title">Статус</div>
     <div style="display:flex;gap:6px;margin-bottom:14px">
       ${['todo','done','problem'].map(st => `<button class="btn btn-sm ${d.status===st?'btn-primary':'btn-secondary'}" style="flex:1" onclick="setDevStatus('${id}','${st}')">${DEV_STATUS[st]}</button>`).join('')}
@@ -1880,6 +1934,13 @@ function openDevice(id) {
     <button class="btn btn-danger btn-sm" onclick="deleteDevice('${id}')">Удалить прибор</button>
   `;
   showModal('deviceDetailModal');
+}
+function setDeviceType(id, typeId) {
+  if (!state.isOnline || !state.user?.token) { showToast('Изменить — только онлайн'); return; }
+  const d = state.devices.find(x => x.id === id);
+  if (!d) return;
+  d.type = typeId; saveLocal(); pushDevice(d);
+  refreshPlan(d.objectId); openDevice(id);
 }
 function setDevStatus(id, st) {
   if (!state.isOnline || !state.user?.token) { showToast('Изменить — только онлайн'); return; }
