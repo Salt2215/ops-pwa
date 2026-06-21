@@ -510,7 +510,7 @@ function visibleObjects() {
 window.addEventListener('online',  () => { state.isOnline = true;  updateOfflineBanner(); syncAll(); });
 window.addEventListener('offline', () => { state.isOnline = false; updateOfflineBanner(); });
 
-const APP_VERSION = 'v32'; // видимая метка версии — должна совпадать с кэшем в sw.js
+const APP_VERSION = 'v33'; // видимая метка версии — должна совпадать с кэшем в sw.js
 function updateOfflineBanner() {
   const banner = document.getElementById('offlineBanner');
   banner.classList.toggle('show', !state.isOnline);
@@ -1759,13 +1759,17 @@ function renderPlanViewer(objId) {
     // прицел по центру видимой области — точка ставится сюда, палец не мешает
     c.insertAdjacentHTML('beforeend',
       `<div id="planCross" style="position:absolute;pointer-events:none;transform:translate(-50%,-50%);z-index:5">
-        <svg width="46" height="46" viewBox="0 0 46 46">
-          <circle cx="23" cy="23" r="13" fill="none" stroke="#e8841a" stroke-width="2"/>
-          <line x1="23" y1="3"  x2="23" y2="17" stroke="#e8841a" stroke-width="2"/>
-          <line x1="23" y1="29" x2="23" y2="43" stroke="#e8841a" stroke-width="2"/>
-          <line x1="3"  y1="23" x2="17" y2="23" stroke="#e8841a" stroke-width="2"/>
-          <line x1="29" y1="23" x2="43" y2="23" stroke="#e8841a" stroke-width="2"/>
-          <circle cx="23" cy="23" r="2" fill="#e8841a"/>
+        <svg width="34" height="34" viewBox="0 0 34 34">
+          <g stroke="#fff" stroke-width="3.4" stroke-linecap="round" opacity="0.8">
+            <line x1="17" y1="2" x2="17" y2="12"/><line x1="17" y1="22" x2="17" y2="32"/>
+            <line x1="2" y1="17" x2="12" y2="17"/><line x1="22" y1="17" x2="32" y2="17"/>
+          </g>
+          <g stroke="#e8841a" stroke-width="1.6" stroke-linecap="round">
+            <line x1="17" y1="2" x2="17" y2="12"/><line x1="17" y1="22" x2="17" y2="32"/>
+            <line x1="2" y1="17" x2="12" y2="17"/><line x1="22" y1="17" x2="32" y2="17"/>
+          </g>
+          <circle cx="17" cy="17" r="2.4" fill="#fff" opacity="0.85"/>
+          <circle cx="17" cy="17" r="1.4" fill="#e8841a"/>
         </svg></div>`);
     const cross = document.getElementById('planCross');
     if (cross) { cross.style.left = (ns.offsetLeft + ns.clientWidth / 2) + 'px'; cross.style.top = (ns.offsetTop + ns.clientHeight / 2) + 'px'; }
