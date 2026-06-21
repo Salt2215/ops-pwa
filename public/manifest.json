@@ -1,16 +1,17 @@
 {
   "name": "ОПС Журнал",
   "short_name": "ОПС",
-  "description": "Цифровой журнал объектов охранно-пожарной сигнализации",
+  "description": "Учёт монтажа пожарной и охранной сигнализации на объектах",
+  "lang": "ru",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#0a0a14",
   "theme_color": "#0a0a14",
   "icons": [
-    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
-    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
-  ],
-  "categories": ["productivity", "utilities"],
-  "lang": "ru"
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
 }

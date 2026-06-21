@@ -8,7 +8,7 @@
 <meta name="apple-mobile-web-app-title" content="ОПС Журнал">
 <meta name="theme-color" content="#0a0a14">
 <link rel="manifest" href="/manifest.json">
-<link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <title>ОПС Журнал</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -509,8 +509,16 @@ function visibleObjects() {
 // ─── Offline detection ───
 window.addEventListener('online',  () => { state.isOnline = true;  updateOfflineBanner(); syncAll(); });
 window.addEventListener('offline', () => { state.isOnline = false; updateOfflineBanner(); });
+// установка на телефон (Android Chrome даёт системный диалог; на iOS — через «Поделиться»)
+let deferredInstall = null;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; });
+function installApp() {
+  if (deferredInstall) { deferredInstall.prompt(); deferredInstall = null; return; }
+  if (window.matchMedia('(display-mode: standalone)').matches || navigator.standalone) { showToast('Приложение уже установлено'); return; }
+  showToast('iPhone: «Поделиться» → «На экран Домой». Android: меню браузера → «Установить приложение».', 5000);
+}
 
-const APP_VERSION = 'v33'; // видимая метка версии — должна совпадать с кэшем в sw.js
+const APP_VERSION = 'v34'; // видимая метка версии — должна совпадать с кэшем в sw.js
 function updateOfflineBanner() {
   const banner = document.getElementById('offlineBanner');
   banner.classList.toggle('show', !state.isOnline);
@@ -706,6 +714,12 @@ function renderProfile(c) {
         <div class="card-title">Синхронизация</div>
         <div style="font-size:13px;color:var(--text2);margin-bottom:10px">Ожидают синхронизации: <strong style="color:${pendingTotal()>0?'var(--yellow)':'var(--green)'}">${pendingTotal()}</strong></div>
         <button class="btn btn-primary btn-sm" onclick="syncAll()">↻ Синхронизировать сейчас</button>
+      </div>
+
+      <div class="card" style="margin:0 0 12px">
+        <div class="card-title">Приложение</div>
+        <div style="font-size:13px;color:var(--text2);margin-bottom:10px">Установи на телефон — будет открываться как обычное приложение, с иконкой на экране.</div>
+        <button class="btn btn-secondary btn-sm" onclick="installApp()">📲 Установить на телефон</button>
       </div>
 
       <div class="card" style="margin:0">
