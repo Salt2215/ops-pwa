@@ -510,7 +510,7 @@ function visibleObjects() {
 window.addEventListener('online',  () => { state.isOnline = true;  updateOfflineBanner(); syncAll(); });
 window.addEventListener('offline', () => { state.isOnline = false; updateOfflineBanner(); });
 
-const APP_VERSION = 'v31'; // видимая метка версии — должна совпадать с кэшем в sw.js
+const APP_VERSION = 'v32'; // видимая метка версии — должна совпадать с кэшем в sw.js
 function updateOfflineBanner() {
   const banner = document.getElementById('offlineBanner');
   banner.classList.toggle('show', !state.isOnline);
@@ -1681,17 +1681,9 @@ function planClick(ev, objId) {
     }
     return;
   }
-  // 2) рисование линии: каждый тап добавляет точку (с привязкой к прямым углам)
+  // 2) рисование линии: каждый тап добавляет точку
   if (drawingSegObjId === objId) {
-    let nx = +x.toFixed(2), ny = +y.toFixed(2);
-    if (segPoints.length > 0) {
-      const prev = segPoints[segPoints.length - 1];
-      const sp = snapAngle(prev.x, prev.y, nx, ny);
-      nx = sp.x; ny = sp.y;
-    }
-    segPoints.push({ x: nx, y: ny });
-    updateOverlays(objId);     // рисуем линию на месте — камера остаётся где была
-    if (segPoints.length === 1) showToast('Точка 1. Тапайте дальше, потом «Завершить»');
+    addDrawPoint(objId, x, y);
     return;
   }
   // 3) обычный тап — открыть ближайший участок (по кривой)
@@ -1744,12 +1736,10 @@ function renderPlanViewer(objId) {
       <span style="font-size:12px;color:var(--text3)">${Math.round(viewerZoom*100)}%</span>
       <div style="flex:1"></div>
       ${drawing
-        ? `<button class="btn btn-secondary btn-sm" onclick="undoSegPoint('${objId}')">⌫</button>
-           <button class="btn btn-primary btn-sm" onclick="finishSegLine('${objId}')">✓ Завершить</button>
-           <button class="btn btn-secondary btn-sm" onclick="stopDrawingSeg('${objId}')">✕</button>`
+        ? `<button class="btn btn-secondary btn-sm" onclick="stopDrawingSeg('${objId}')">✕ Выйти</button>`
         : `<button class="btn btn-secondary btn-sm" onclick="startDrawingSeg('${objId}')">✏️ Рисовать</button>`}
     </div>
-    ${drawing ? `<div style="padding:6px 12px;background:var(--bg2);color:#e8841a;font-size:13px;text-align:center;flex-shrink:0">Тапайте точки линии по очереди (точек: <span class="seg-count">${segPoints.length}</span>), затем «✓ Завершить»</div>` : ''}
+    ${drawing ? `<div style="padding:6px 12px;background:var(--bg2);color:#e8841a;font-size:13px;text-align:center;flex-shrink:0">Целься прицелом и жми «＋ Точка» внизу (или тапай по плану). Точек: <span class="seg-count">${segPoints.length}</span></div>` : ''}
     <div id="planScroll" style="flex:1;overflow:auto;background:var(--bg);-webkit-overflow-scrolling:touch">
       <div style="position:relative;width:${viewerZoom*100}%;line-height:0">
         <img src="${planCache[activeDid(objId)]}" onclick="planClick(event,'${objId}')" style="width:100%;display:block;cursor:${drawing?'crosshair':'default'}">
@@ -1757,9 +1747,29 @@ function renderPlanViewer(objId) {
         <div class="pins-ov" style="position:absolute;inset:0;pointer-events:none">${pinsOverlayHtml(objId, drawing)}</div>
         <div class="dev-ov" style="position:absolute;inset:0;pointer-events:none">${devicesOverlayHtml(objId, drawing)}</div>
       </div>
-    </div>`;
+    </div>
+    ${drawing ? `<div style="position:absolute;left:0;right:0;bottom:0;display:flex;gap:10px;justify-content:center;align-items:center;padding:14px;padding-bottom:calc(14px + env(safe-area-inset-bottom));background:linear-gradient(transparent,rgba(0,0,0,.5));pointer-events:none">
+      <button class="btn btn-secondary" style="pointer-events:auto" onclick="undoSegPoint('${objId}')">⌫</button>
+      <button class="btn btn-primary" style="pointer-events:auto;font-size:16px;padding:14px 26px;border-radius:30px;box-shadow:0 4px 16px rgba(0,0,0,.4)" onclick="addPointAtCenter('${objId}')">＋ Точка</button>
+      <button class="btn btn-secondary" style="pointer-events:auto;background:var(--green);color:#fff;border-color:var(--green)" onclick="finishSegLine('${objId}')">✓ Готово</button>
+    </div>` : ''}`;
   const ns = document.getElementById('planScroll');
   if (ns) { ns.scrollLeft = sx; ns.scrollTop = sy; } // вернуть прокрутку на место
+  if (drawing && ns) {
+    // прицел по центру видимой области — точка ставится сюда, палец не мешает
+    c.insertAdjacentHTML('beforeend',
+      `<div id="planCross" style="position:absolute;pointer-events:none;transform:translate(-50%,-50%);z-index:5">
+        <svg width="46" height="46" viewBox="0 0 46 46">
+          <circle cx="23" cy="23" r="13" fill="none" stroke="#e8841a" stroke-width="2"/>
+          <line x1="23" y1="3"  x2="23" y2="17" stroke="#e8841a" stroke-width="2"/>
+          <line x1="23" y1="29" x2="23" y2="43" stroke="#e8841a" stroke-width="2"/>
+          <line x1="3"  y1="23" x2="17" y2="23" stroke="#e8841a" stroke-width="2"/>
+          <line x1="29" y1="23" x2="43" y2="23" stroke="#e8841a" stroke-width="2"/>
+          <circle cx="23" cy="23" r="2" fill="#e8841a"/>
+        </svg></div>`);
+    const cross = document.getElementById('planCross');
+    if (cross) { cross.style.left = (ns.offsetLeft + ns.clientWidth / 2) + 'px'; cross.style.top = (ns.offsetTop + ns.clientHeight / 2) + 'px'; }
+  }
 }
 function cancelPlacing(objId) {
   placingShleyfId = null;
@@ -1795,6 +1805,40 @@ function undoSegPoint(objId) {
   if (!segPoints.length) return;
   segPoints.pop();
   updateOverlays(objId);
+}
+// привязка к близкой точке уже нарисованных линий (удобно соединять встык)
+function snapToVertex(objId, x, y) {
+  const thr = 2.5 / (planCtx === 'viewer' ? (viewerZoom || 1) : 1);
+  let best = null, bestD = thr;
+  for (const s of segmentsForObject(objId)) {
+    for (const p of segPts(s)) {
+      const d = Math.hypot(p.x - x, p.y - y);
+      if (d < bestD) { bestD = d; best = p; }
+    }
+  }
+  return best ? { x: +(+best.x).toFixed(2), y: +(+best.y).toFixed(2) } : null;
+}
+// добавить точку линии: привязка к узлу, иначе привязка к прямым углам
+function addDrawPoint(objId, x, y) {
+  let nx = +x.toFixed(2), ny = +y.toFixed(2);
+  const snap = snapToVertex(objId, nx, ny);
+  if (snap) { nx = snap.x; ny = snap.y; }
+  else if (segPoints.length > 0) {
+    const prev = segPoints[segPoints.length - 1];
+    const sp = snapAngle(prev.x, prev.y, nx, ny);
+    nx = sp.x; ny = sp.y;
+  }
+  segPoints.push({ x: nx, y: ny });
+  updateOverlays(objId);
+  if (segPoints.length === 1) showToast('Точка 1. Целься прицелом и жми «＋ Точка» (или тапай по плану)');
+}
+// поставить точку в центр прицела (по центру видимой области в полноэкранном режиме)
+function addPointAtCenter(objId) {
+  const ns = document.getElementById('planScroll');
+  if (!ns || !ns.scrollWidth || !ns.scrollHeight) return;
+  const x = (ns.scrollLeft + ns.clientWidth / 2) / ns.scrollWidth * 100;
+  const y = (ns.scrollTop + ns.clientHeight / 2) / ns.scrollHeight * 100;
+  addDrawPoint(objId, x, y);
 }
 // линию нарисовали — пока не сохраняем, а спрашиваем, к какому шлейфу её отнести
 let pendingSeg = null; // { objId, drawingId, points }
