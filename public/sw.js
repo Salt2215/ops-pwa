@@ -1,4 +1,4 @@
-const CACHE = 'ops-pwa-v29';
+const CACHE = 'ops-pwa-v30';
 const ASSETS = ['/', '/index.html', '/manifest.json'];
 
 self.addEventListener('install', e => {
@@ -10,7 +10,7 @@ self.addEventListener('install', e => {
 self.addEventListener('activate', e => {
   e.waitUntil(
     caches.keys()
-      .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
+      .then(keys => Promise.all(keys.filter(k => k !== CACHE && k !== 'ops-plans').map(k => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });

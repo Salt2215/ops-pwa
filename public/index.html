@@ -510,7 +510,7 @@ function visibleObjects() {
 window.addEventListener('online',  () => { state.isOnline = true;  updateOfflineBanner(); syncAll(); });
 window.addEventListener('offline', () => { state.isOnline = false; updateOfflineBanner(); });
 
-const APP_VERSION = 'v29'; // видимая метка версии — должна совпадать с кэшем в sw.js
+const APP_VERSION = 'v30'; // видимая метка версии — должна совпадать с кэшем в sw.js
 function updateOfflineBanner() {
   const banner = document.getElementById('offlineBanner');
   banner.classList.toggle('show', !state.isOnline);
@@ -1475,21 +1475,51 @@ function renderPlanBox(objId) {
   if (!did) { box.innerHTML = tabs + planEmptyHtml(objId, eng); return; }
   // картинка активного чертежа уже в памяти
   if (planCache[did]) { box.innerHTML = tabs + '<div id="planSlot">' + planImgHtml(objId, eng) + '</div>'; return; }
-  // подгружаем картинку активного чертежа
+  // подгружаем: память → постоянный кэш (офлайн) → сервер (онлайн)
+  box.innerHTML = tabs + '<div id="planSlot"><div style="font-size:13px;color:var(--text3)">Загрузка чертежа…</div></div>';
+  planImageGet(did).then(img => {
+    const slot = document.getElementById('planSlot');
+    if (!slot || activeDid(objId) !== did) return; // вкладку успели переключить
+    if (img) slot.innerHTML = planImgHtml(objId, eng);
+    else slot.innerHTML = state.isOnline
+      ? planEmptyHtml(objId, eng)
+      : '<div style="font-size:13px;color:var(--text3)">Чертёж не сохранён офлайн.<br>Откройте его один раз при интернете — потом будет доступен без сети.</div>';
+  });
+}
+
+// ─── Постоянный кэш картинок чертежей (Cache API, доступно офлайн) ───
+const PLAN_CACHE_NAME = 'ops-plans';
+function planKey(did) { return '/__plan/' + did; }
+async function planImageStore(did, dataUrl) {
+  planCache[did] = dataUrl; // синхронно — сразу доступно в памяти
+  try {
+    if ('caches' in window) {
+      const c = await caches.open(PLAN_CACHE_NAME);
+      await c.put(planKey(did), new Response(dataUrl, { headers: { 'Content-Type': 'text/plain' } }));
+    }
+  } catch (e) { /* нет места/недоступно — в памяти картинка всё равно есть */ }
+}
+async function planImageGet(did) {
+  if (planCache[did]) return planCache[did];
+  try {
+    if ('caches' in window) {
+      const c = await caches.open(PLAN_CACHE_NAME);
+      const r = await c.match(planKey(did));
+      if (r) { const t = await r.text(); planCache[did] = t; return t; }
+    }
+  } catch (e) {}
   if (state.isOnline && state.user?.token) {
-    box.innerHTML = tabs + '<div id="planSlot"><div style="font-size:13px;color:var(--text3)">Загрузка чертежа…</div></div>';
-    fetch(`${API_URL}/api/drawing/${did}`, { headers: { 'Authorization': `Bearer ${state.user.token}` } })
-      .then(r => r.json())
-      .then(d => {
-        const slot = document.getElementById('planSlot');
-        if (!slot) return;
-        if (d.image) { planCache[did] = d.image; slot.innerHTML = planImgHtml(objId, eng); }
-        else slot.innerHTML = planEmptyHtml(objId, eng);
-      })
-      .catch(() => { const slot = document.getElementById('planSlot'); if (slot) slot.innerHTML = planEmptyHtml(objId, eng); });
-    return;
+    try {
+      const r = await fetch(`${API_URL}/api/drawing/${did}`, { headers: { 'Authorization': `Bearer ${state.user.token}` } });
+      const d = await r.json();
+      if (d && d.image) { await planImageStore(did, d.image); return d.image; }
+    } catch (e) {}
   }
-  box.innerHTML = tabs + '<div id="planSlot"><div style="font-size:13px;color:var(--text3)">Чертёж недоступен офлайн.</div></div>';
+  return null;
+}
+async function planImageDelete(did) {
+  delete planCache[did];
+  try { if ('caches' in window) { const c = await caches.open(PLAN_CACHE_NAME); await c.delete(planKey(did)); } } catch (e) {}
 }
 function setActiveDrawing(objId, did) {
   activeDrawing[objId] = did;
@@ -2087,7 +2117,7 @@ function renderPdfPlan(file, objId, split) {
 function addPageDrawing(objId, name, dataUrl, makeActive, ts) {
   const did = 'dr' + (ts || Date.now()) + Math.floor(Math.random() * 1000);
   state.drawings.push({ id: did, objectId: objId, name, ts: ts || Date.now() });
-  planCache[did] = dataUrl;
+  planImageStore(did, dataUrl);
   if (makeActive) activeDrawing[objId] = did;
   const obj = state.objects.find(o => o.id === objId);
   if (obj) obj.hasPlan = true;
@@ -2104,7 +2134,7 @@ function addPageDrawing(objId, name, dataUrl, makeActive, ts) {
 function savePlanDataUrl(objId, dataUrl) {
   const did = activeDid(objId);
   if (!did) { showToast('Сначала добавьте чертёж'); return; }
-  planCache[did] = dataUrl;
+  planImageStore(did, dataUrl);
   const obj = state.objects.find(o => o.id === objId);
   if (obj) obj.hasPlan = true;
   saveLocal();
@@ -2127,8 +2157,8 @@ function deletePlan(objId) {
   state.drawings = state.drawings.filter(d => d.id !== did);
   state.planSegments = state.planSegments.filter(s => (s.drawingId || s.objectId) !== did);
   state.devices = state.devices.filter(d => (d.drawingId || d.objectId) !== did);
-  delete planCache[did];
   delete activeDrawing[objId];
+  planImageDelete(did);
   if (!drawingsForObject(objId).length) { const obj = state.objects.find(o => o.id === objId); if (obj) obj.hasPlan = false; }
   saveLocal();
   if (state.isOnline && state.user?.token) {
