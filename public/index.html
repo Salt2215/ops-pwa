@@ -480,6 +480,7 @@ let state = {
   objects: JSON.parse(localStorage.getItem('ops_objects') || '[]'),
   entries: JSON.parse(localStorage.getItem('ops_entries') || '[]'),
   pendingEntries: JSON.parse(localStorage.getItem('ops_pending') || '[]'),
+  outbox: JSON.parse(localStorage.getItem('ops_outbox') || '[]'),
   team: JSON.parse(localStorage.getItem('ops_team') || '[]'),
   projects: JSON.parse(localStorage.getItem('ops_projects') || '[]'),
   shleyfy: JSON.parse(localStorage.getItem('ops_shleyfy') || '[]'),
@@ -509,13 +510,14 @@ function visibleObjects() {
 window.addEventListener('online',  () => { state.isOnline = true;  updateOfflineBanner(); syncAll(); });
 window.addEventListener('offline', () => { state.isOnline = false; updateOfflineBanner(); });
 
-const APP_VERSION = 'v28'; // видимая метка версии — должна совпадать с кэшем в sw.js
+const APP_VERSION = 'v29'; // видимая метка версии — должна совпадать с кэшем в sw.js
 function updateOfflineBanner() {
   const banner = document.getElementById('offlineBanner');
   banner.classList.toggle('show', !state.isOnline);
+  const pend = (typeof pendingTotal === 'function') ? pendingTotal() : 0;
   document.getElementById('headerSub').textContent = (state.isOnline
     ? (isEngineer() ? '👑 Инженер' : 'Монтажник')
-    : 'Офлайн — данные сохраняются') + ' · ' + APP_VERSION;
+    : 'Офлайн — изменения сохраняются') + (pend > 0 ? ' · ↑' + pend : '') + ' · ' + APP_VERSION;
 }
 
 // ─── Navigation ───
@@ -554,7 +556,7 @@ function renderHome(c) {
   const today = new Date().toDateString();
   const myEntries = isEngineer() ? allEntries() : allEntries().filter(e => e.userName === myName());
   const todayEntries = myEntries.filter(e => new Date(e.ts).toDateString() === today);
-  const pending = state.pendingEntries.length;
+  const pending = pendingTotal();
   const openProblems = myEntries.filter(e => e.problem && e.problem.trim()).length;
   const objs = visibleObjects();
   const activeObjs = objs.filter(o => o.status === 'active').length;
@@ -702,7 +704,7 @@ function renderProfile(c) {
 
       <div class="card" style="margin:0 0 12px">
         <div class="card-title">Синхронизация</div>
-        <div style="font-size:13px;color:var(--text2);margin-bottom:10px">Ожидают синхронизации: <strong style="color:${state.pendingEntries.length>0?'var(--yellow)':'var(--green)'}">${state.pendingEntries.length} записей</strong></div>
+        <div style="font-size:13px;color:var(--text2);margin-bottom:10px">Ожидают синхронизации: <strong style="color:${pendingTotal()>0?'var(--yellow)':'var(--green)'}">${pendingTotal()}</strong></div>
         <button class="btn btn-primary btn-sm" onclick="syncAll()">↻ Синхронизировать сейчас</button>
       </div>
 
@@ -1413,15 +1415,11 @@ function showShleyfDetail(id) {
 }
 
 function pushShleyfProgress(s) {
-  fetch(`${API_URL}/api/shleyfy/progress`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
-    body: JSON.stringify({ id: s.id, doneCable: s.doneCable||0, doneDevices: s.doneDevices||0, status: s.status }),
-  }).catch(() => {});
+  apiQueue('/api/shleyfy/progress', { id: s.id, doneCable: s.doneCable || 0, doneDevices: s.doneDevices || 0, status: s.status }, 'shprog:' + s.id);
 }
 
 function setShleyfStatus(id, st) {
-  if (!state.isOnline || !state.user?.token) { showToast('Нет интернета — отметить можно онлайн'); return; }
+  if (!state.user?.token) return;
   const s = state.shleyfy.find(x => x.id === id);
   if (!s) return;
   s.status = st;
@@ -1430,7 +1428,7 @@ function setShleyfStatus(id, st) {
 }
 
 function saveShleyfProgress(id) {
-  if (!state.isOnline || !state.user?.token) { showToast('Нет интернета — отметить можно онлайн'); return; }
+  if (!state.user?.token) return;
   const s = state.shleyfy.find(x => x.id === id);
   if (!s) return;
   s.doneCable = parseInt(document.getElementById('shDoneCable').value) || 0;
@@ -1438,24 +1436,20 @@ function saveShleyfProgress(id) {
   if (s.status === 'todo' && s.doneCable > 0) s.status = 'wip';
   saveLocal(); pushShleyfProgress(s);
   showObjectDetail(s.objectId); showShleyfDetail(id);
-  showToast('✅ Прогресс сохранён');
+  showToast(state.isOnline ? '✅ Прогресс сохранён' : '✅ Сохранено офлайн — уйдёт при связи');
 }
 
 function addShleyfLog(id) {
-  if (!state.isOnline || !state.user?.token) { showToast('Нет интернета — записать можно онлайн'); return; }
+  if (!state.user?.token) return;
   const text = document.getElementById('shLogText').value.trim();
   if (!text) { showToast('Напишите текст'); return; }
   const isProblem = document.getElementById('shLogProblem').checked;
   const logId = 'l' + Date.now(), ts = Date.now();
   state.shleyfLog.push({ id: logId, shleyfId: id, author: myName(), text, isProblem, ts });
   saveLocal();
-  fetch(`${API_URL}/api/shleyfy/log`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
-    body: JSON.stringify({ id, logId, text, isProblem, ts }),
-  }).catch(() => {});
+  apiQueue('/api/shleyfy/log', { id, logId, text, isProblem, ts }, 'shlog:' + logId);
   showShleyfDetail(id);
-  showToast('✅ Запись добавлена');
+  showToast(state.isOnline ? '✅ Запись добавлена' : '✅ Записано офлайн — уйдёт при связи');
 }
 
 // ─── План объекта (картинка) ───
@@ -1738,7 +1732,7 @@ function pointDistToSeg(px, py, x1, y1, x2, y2) {
   return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
 }
 function startDrawingSeg(objId) {
-  if (!state.isOnline || !state.user?.token) { showToast('Рисовать участки — только онлайн'); return; }
+  if (!state.user?.token) return;
   drawingSegObjId = objId; segPoints = []; placingShleyfId = null;
   refreshPlan(objId);
   showToast('Тапайте точки линии по очереди');
@@ -1814,11 +1808,7 @@ function stopDrawingSeg(objId) {
   refreshPlan(objId);
 }
 function pushSegment(seg) {
-  fetch(`${API_URL}/api/segments/save`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
-    body: JSON.stringify({ id: seg.id, objectId: seg.objectId, drawingId: seg.drawingId || null, shleyfId: seg.shleyfId || null, points: seg.points || null, x1: seg.x1, y1: seg.y1, x2: seg.x2, y2: seg.y2, status: seg.status, note: seg.note || '', ts: seg.ts }),
-  }).catch(() => {});
+  apiQueue('/api/segments/save', { id: seg.id, objectId: seg.objectId, drawingId: seg.drawingId || null, shleyfId: seg.shleyfId || null, points: seg.points || null, x1: seg.x1, y1: seg.y1, x2: seg.x2, y2: seg.y2, status: seg.status, note: seg.note || '', ts: seg.ts }, 'seg:' + seg.id);
 }
 function openSegment(id) {
   const s = state.planSegments.find(x => x.id === id);
@@ -1842,18 +1832,18 @@ function openSegment(id) {
   showModal('segDetailModal');
 }
 function setSegStatus(id, st) {
-  if (!state.isOnline || !state.user?.token) { showToast('Изменить — только онлайн'); return; }
+  if (!state.user?.token) return;
   const s = state.planSegments.find(x => x.id === id);
   if (!s) return;
   s.status = st; saveLocal(); pushSegment(s);
   refreshPlan(s.objectId); openSegment(id);
 }
 function saveSegNote(id) {
-  if (!state.isOnline || !state.user?.token) { showToast('Сохранить — только онлайн'); return; }
+  if (!state.user?.token) return;
   const s = state.planSegments.find(x => x.id === id);
   if (!s) return;
   s.note = document.getElementById('segNote').value.trim(); saveLocal(); pushSegment(s);
-  showToast('✅ Сохранено');
+  showToast(state.isOnline ? '✅ Сохранено' : '✅ Сохранено офлайн — уйдёт при связи');
 }
 function deleteSegment(id) {
   if (!confirm('Удалить участок?')) return;
@@ -1861,13 +1851,8 @@ function deleteSegment(id) {
   const obj = s ? s.objectId : null;
   state.planSegments = state.planSegments.filter(x => x.id !== id);
   saveLocal();
-  if (state.isOnline && state.user?.token) {
-    fetch(`${API_URL}/api/segments/delete`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
-      body: JSON.stringify({ id }),
-    }).catch(() => {});
-  }
+  outboxDrop('seg:' + id);
+  apiQueue('/api/segments/delete', { id }, 'segdel:' + id);
   closeModal('segDetailModal');
   if (obj) refreshPlan(obj);
   showToast('Удалён');
@@ -1879,13 +1864,8 @@ function deleteSegmentFromShleyf(segId, shId) {
   const obj = s ? s.objectId : null;
   state.planSegments = state.planSegments.filter(x => x.id !== segId);
   saveLocal();
-  if (state.isOnline && state.user?.token) {
-    fetch(`${API_URL}/api/segments/delete`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
-      body: JSON.stringify({ id: segId }),
-    }).catch(() => {});
-  }
+  outboxDrop('seg:' + segId);
+  apiQueue('/api/segments/delete', { id: segId }, 'segdel:' + segId);
   if (obj) refreshPlan(obj);
   showShleyfDetail(shId);
 }
@@ -1903,7 +1883,7 @@ function devicesOverlayHtml(objId, lock) {
 }
 // выбор типа прибора, потом — режим постановки
 function chooseDeviceTypeForPlacing(shId) {
-  if (!state.isOnline || !state.user?.token) { showToast('Ставить приборы — только онлайн'); return; }
+  if (!state.user?.token) return;
   const sh = state.shleyfy.find(x => x.id === shId);
   if (!sh) return;
   if (!activeDid(sh.objectId)) { showToast('Сначала добавьте чертёж объекта'); return; }
@@ -1934,11 +1914,7 @@ function addDeviceAt(sh, x, y) {
 }
 function stopPlacingDevice(objId) { placingDeviceShleyfId = null; refreshPlan(objId); }
 function pushDevice(d) {
-  fetch(`${API_URL}/api/devices/save`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
-    body: JSON.stringify({ id: d.id, objectId: d.objectId, shleyfId: d.shleyfId, drawingId: d.drawingId || null, num: d.num, type: d.type || 'smoke', x: d.x, y: d.y, status: d.status, note: d.note || '', ts: d.ts }),
-  }).catch(() => {});
+  apiQueue('/api/devices/save', { id: d.id, objectId: d.objectId, shleyfId: d.shleyfId, drawingId: d.drawingId || null, num: d.num, type: d.type || 'smoke', x: d.x, y: d.y, status: d.status, note: d.note || '', ts: d.ts }, 'dev:' + d.id);
 }
 function openDevice(id) {
   const d = state.devices.find(x => x.id === id);
@@ -1965,25 +1941,25 @@ function openDevice(id) {
   showModal('deviceDetailModal');
 }
 function setDeviceType(id, typeId) {
-  if (!state.isOnline || !state.user?.token) { showToast('Изменить — только онлайн'); return; }
+  if (!state.user?.token) return;
   const d = state.devices.find(x => x.id === id);
   if (!d) return;
   d.type = typeId; saveLocal(); pushDevice(d);
   refreshPlan(d.objectId); openDevice(id);
 }
 function setDevStatus(id, st) {
-  if (!state.isOnline || !state.user?.token) { showToast('Изменить — только онлайн'); return; }
+  if (!state.user?.token) return;
   const d = state.devices.find(x => x.id === id);
   if (!d) return;
   d.status = st; saveLocal(); pushDevice(d);
   refreshPlan(d.objectId); openDevice(id);
 }
 function saveDevNote(id) {
-  if (!state.isOnline || !state.user?.token) { showToast('Сохранить — только онлайн'); return; }
+  if (!state.user?.token) return;
   const d = state.devices.find(x => x.id === id);
   if (!d) return;
   d.note = document.getElementById('devNote').value.trim(); saveLocal(); pushDevice(d);
-  showToast('✅ Сохранено');
+  showToast(state.isOnline ? '✅ Сохранено' : '✅ Сохранено офлайн — уйдёт при связи');
 }
 function deleteDevice(id) {
   if (!confirm('Удалить прибор?')) return;
@@ -1991,13 +1967,8 @@ function deleteDevice(id) {
   const obj = d ? d.objectId : null;
   state.devices = state.devices.filter(x => x.id !== id);
   saveLocal();
-  if (state.isOnline && state.user?.token) {
-    fetch(`${API_URL}/api/devices/delete`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
-      body: JSON.stringify({ id }),
-    }).catch(() => {});
-  }
+  outboxDrop('dev:' + id);                       // отменяем неотправленное сохранение этого прибора
+  apiQueue('/api/devices/delete', { id }, 'devdel:' + id);
   closeModal('deviceDetailModal');
   if (obj) refreshPlan(obj);
   showToast('Удалён');
@@ -2300,14 +2271,8 @@ async function syncProjects() {
 }
 
 async function syncShleyfy() {
-  if (!state.isOnline || !state.user?.token || !isEngineer()) return;
-  try {
-    await fetch(`${API_URL}/api/shleyfy/sync`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user?.token}` },
-      body: JSON.stringify({ shleyfy: state.shleyfy }),
-    });
-  } catch {}
+  if (!state.user?.token || !isEngineer()) return;
+  apiQueue('/api/shleyfy/sync', { shleyfy: state.shleyfy }, 'shleyfy');
 }
 
 async function syncObjects() {
@@ -2330,12 +2295,60 @@ async function syncTeam() {
     });
   } catch {}
 }
+// ─── Очередь офлайн-записей (outbox) ───
+// Полевые изменения сначала применяются локально, потом кладутся сюда и уходят на
+// сервер. Нет связи — ждут в очереди и отправляются при подключении. Все серверные
+// ручки идемпотентны (upsert по id), поэтому повторная отправка безопасна.
+function apiQueue(url, body, key) {
+  if (!state.user?.token) return;
+  const entry = { url, body, key: key || (url + ':' + Date.now() + Math.random()) };
+  const i = state.outbox.findIndex(e => e.key === entry.key);
+  if (i >= 0) state.outbox[i] = entry;   // тот же объект изменён повторно — храним последнее состояние
+  else state.outbox.push(entry);
+  saveLocal();
+  if (typeof updateOfflineBanner === 'function') updateOfflineBanner();
+  flushOutbox();
+}
+function outboxDrop(key) {
+  const before = state.outbox.length;
+  state.outbox = state.outbox.filter(e => e.key !== key);
+  if (state.outbox.length !== before) saveLocal();
+}
+let _flushing = false;
+async function flushOutbox() {
+  if (_flushing || !state.isOnline || !state.user?.token || !state.outbox.length) return;
+  _flushing = true;
+  try {
+    while (state.outbox.length) {
+      const e = state.outbox[0];
+      let ok = false;
+      try {
+        const r = await fetch(`${API_URL}${e.url}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
+          body: JSON.stringify(e.body),
+        });
+        ok = r.ok;
+      } catch { ok = false; }
+      if (ok) { state.outbox.shift(); saveLocal(); }
+      else break; // связь пропала/ошибка — оставляем очередь как есть, дошлём позже
+    }
+  } finally { _flushing = false; }
+  updatePendingUi();
+}
+function pendingTotal() { return state.pendingEntries.length + state.outbox.length; }
+function updatePendingUi() {
+  updateOfflineBanner();
+  if (['home', 'profile'].includes(state.currentScreen)) renderScreen(state.currentScreen);
+}
+
 async function syncAll(silent = false) {
   if (!state.isOnline) { if (!silent) showToast('Нет подключения к интернету'); return; }
   if (!state.user?.token) { if (!silent) showToast('Войдите через Telegram-бота, чтобы синхронизировать'); return; }
   const btn = document.getElementById('syncBtn');
   if (btn) btn.classList.add('syncing');
 
+  await flushOutbox();          // сначала отправляем накопленные офлайн-изменения
   await syncObjects();
   await syncTeam();
   await syncProjects();
@@ -2347,6 +2360,8 @@ async function syncAll(silent = false) {
     if (ok) { synced.push(entry.id); state.entries.push({ ...entry, synced: true }); }
   }
   state.pendingEntries = state.pendingEntries.filter(e => !synced.includes(e.id));
+
+  await flushOutbox();          // syncShleyfy мог положить запись в очередь — дошлём до чтения с сервера
 
   try {
     const res = await fetch(`${API_URL}/api/sync`, { headers: { 'Authorization': `Bearer ${state.user?.token}` } });
@@ -2379,6 +2394,7 @@ function saveLocal() {
   localStorage.setItem('ops_objects', JSON.stringify(state.objects));
   localStorage.setItem('ops_entries', JSON.stringify(state.entries));
   localStorage.setItem('ops_pending', JSON.stringify(state.pendingEntries));
+  localStorage.setItem('ops_outbox', JSON.stringify(state.outbox));
   localStorage.setItem('ops_team',    JSON.stringify(state.team));
   localStorage.setItem('ops_projects', JSON.stringify(state.projects));
   localStorage.setItem('ops_shleyfy', JSON.stringify(state.shleyfy));
