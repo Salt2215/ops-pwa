@@ -510,7 +510,7 @@ function visibleObjects() {
 window.addEventListener('online',  () => { state.isOnline = true;  updateOfflineBanner(); syncAll(); });
 window.addEventListener('offline', () => { state.isOnline = false; updateOfflineBanner(); });
 
-const APP_VERSION = 'v30'; // видимая метка версии — должна совпадать с кэшем в sw.js
+const APP_VERSION = 'v31'; // видимая метка версии — должна совпадать с кэшем в sw.js
 function updateOfflineBanner() {
   const banner = document.getElementById('offlineBanner');
   banner.classList.toggle('show', !state.isOnline);
@@ -1577,7 +1577,7 @@ function snapAngle(px, py, x, y) {
     y: +(py + len * Math.sin(snapped)).toFixed(2),
   };
 }
-function segOverlaySvg(objId) {
+function segOverlayInner(objId) {
   const W = 2.4; // толщина линии в пикселях — постоянная, не зависит от формы плана и зума
   const LINE_OP = 0.5;   // прозрачность линии (0 — невидима, 1 — сплошная); меньше = лучше видно чертёж
   const HALO_OP = 0.28;  // прозрачность тёмной подложки под линией (для контраста на пёстром плане)
@@ -1599,7 +1599,27 @@ function segOverlaySvg(objId) {
     }
     temp += segPoints.map(p => `<circle cx="${p.x}" cy="${p.y}" r="1" fill="none" stroke="#e8841a" stroke-width="1.2" stroke-opacity=".85" vector-effect="non-scaling-stroke"></circle>`).join('');
   }
-  return `<svg viewBox="0 0 100 100" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none">${lines}${temp}</svg>`;
+  return lines + temp;
+}
+function segOverlaySvg(objId) {
+  return `<svg class="seg-ov" viewBox="0 0 100 100" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none">${segOverlayInner(objId)}</svg>`;
+}
+// обновить только оверлеи (линия/метки/приборы) на месте, не пересобирая картинку — сохраняет прокрутку и зум
+function planRoot() { return planCtx === 'viewer' ? document.getElementById('planViewerContent') : document.getElementById('planSlot'); }
+function curLock(objId) {
+  const placing = placingShleyfId && state.shleyfy.find(z => z.id === placingShleyfId)?.objectId === objId;
+  const drawing = drawingSegObjId === objId;
+  const pdev = placingDeviceShleyfId && state.shleyfy.find(z => z.id === placingDeviceShleyfId)?.objectId === objId;
+  return !!(placing || drawing || pdev);
+}
+function updateOverlays(objId) {
+  const root = planRoot();
+  if (!root) { refreshPlan(objId); return; }
+  const lock = curLock(objId);
+  const svg = root.querySelector('svg.seg-ov'); if (svg) svg.innerHTML = segOverlayInner(objId);
+  const p = root.querySelector('.pins-ov'); if (p) p.innerHTML = pinsOverlayHtml(objId, lock);
+  const d = root.querySelector('.dev-ov'); if (d) d.innerHTML = devicesOverlayHtml(objId, lock);
+  const c = root.querySelector('.seg-count'); if (c) c.textContent = segPoints.length;
 }
 function pinsOverlayHtml(objId, drawing) {
   const did = activeDid(objId);
@@ -1619,7 +1639,7 @@ function planImgHtml(objId, eng) {
   return `
     ${placing ? `<div style="font-size:13px;color:var(--yellow);margin-bottom:6px">Тапните на плане, куда поставить метку. <a onclick="cancelPlacing('${objId}')" style="color:var(--text2);text-decoration:underline;cursor:pointer">Отмена</a></div>` : ''}
     ${placingDevSh ? `<div style="font-size:13px;color:var(--green);margin-bottom:6px">Ставим: <b>${devType(placingDeviceType).name}</b> — тап = прибор. <a onclick="chooseDeviceTypeForPlacing('${placingDevSh.id}')" style="color:var(--text2);text-decoration:underline;cursor:pointer">сменить тип</a> · <a onclick="stopPlacingDevice('${objId}')" style="color:var(--text2);text-decoration:underline;cursor:pointer">Готово</a></div>` : ''}
-    ${drawing ? `<div style="font-size:13px;color:#e8841a;margin-bottom:6px">Тапайте точки линии по очереди (точек: ${segPoints.length}).<br>
+    ${drawing ? `<div style="font-size:13px;color:#e8841a;margin-bottom:6px">Тапайте точки линии по очереди (точек: <span class="seg-count">${segPoints.length}</span>).<br>
       <a onclick="finishSegLine('${objId}')" style="color:var(--green);text-decoration:underline;cursor:pointer">✓ Завершить линию</a> · 
       <a onclick="undoSegPoint('${objId}')" style="color:var(--text2);text-decoration:underline;cursor:pointer">⌫ убрать точку</a> · 
       <a onclick="stopDrawingSeg('${objId}')" style="color:var(--text2);text-decoration:underline;cursor:pointer">выйти</a></div>` : ''}
@@ -1627,8 +1647,8 @@ function planImgHtml(objId, eng) {
       <img src="${planCache[did]}" onclick="planClick(event,'${objId}')"
         style="width:100%;border-radius:8px;border:1px solid var(--border);display:block;cursor:${lock ? 'crosshair' : 'default'}">
       ${segOverlaySvg(objId)}
-      ${pinsOverlayHtml(objId, lock)}
-      ${devicesOverlayHtml(objId, lock)}
+      <div class="pins-ov" style="position:absolute;inset:0;pointer-events:none">${pinsOverlayHtml(objId, lock)}</div>
+      <div class="dev-ov" style="position:absolute;inset:0;pointer-events:none">${devicesOverlayHtml(objId, lock)}</div>
     </div>
     <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
       <button class="btn btn-secondary btn-sm" onclick="openPlanViewer('${objId}')">⛶ На весь экран</button>
@@ -1657,7 +1677,7 @@ function planClick(ev, objId) {
     const sh = state.shleyfy.find(z => z.id === placingDeviceShleyfId);
     if (sh && sh.objectId === objId) {
       addDeviceAt(sh, x, y);
-      refreshPlan(objId);
+      updateOverlays(objId);   // обновляем только приборы — не сбрасываем прокрутку/зум
     }
     return;
   }
@@ -1670,7 +1690,7 @@ function planClick(ev, objId) {
       nx = sp.x; ny = sp.y;
     }
     segPoints.push({ x: nx, y: ny });
-    refreshPlan(objId);
+    updateOverlays(objId);     // рисуем линию на месте — камера остаётся где была
     if (segPoints.length === 1) showToast('Точка 1. Тапайте дальше, потом «Завершить»');
     return;
   }
@@ -1713,6 +1733,8 @@ function zoomViewer(f) {
 function renderPlanViewer(objId) {
   const c = document.getElementById('planViewerContent');
   if (!c) return;
+  const prev = document.getElementById('planScroll');
+  const sx = prev ? prev.scrollLeft : 0, sy = prev ? prev.scrollTop : 0; // запомнить прокрутку
   const drawing = drawingSegObjId === objId;
   c.innerHTML = `
     <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--bg2);border-bottom:1px solid var(--border);flex-shrink:0">
@@ -1727,15 +1749,17 @@ function renderPlanViewer(objId) {
            <button class="btn btn-secondary btn-sm" onclick="stopDrawingSeg('${objId}')">✕</button>`
         : `<button class="btn btn-secondary btn-sm" onclick="startDrawingSeg('${objId}')">✏️ Рисовать</button>`}
     </div>
-    ${drawing ? `<div style="padding:6px 12px;background:var(--bg2);color:#e8841a;font-size:13px;text-align:center;flex-shrink:0">Тапайте точки линии по очереди (точек: ${segPoints.length}), затем «✓ Завершить»</div>` : ''}
-    <div style="flex:1;overflow:auto;background:var(--bg);-webkit-overflow-scrolling:touch">
+    ${drawing ? `<div style="padding:6px 12px;background:var(--bg2);color:#e8841a;font-size:13px;text-align:center;flex-shrink:0">Тапайте точки линии по очереди (точек: <span class="seg-count">${segPoints.length}</span>), затем «✓ Завершить»</div>` : ''}
+    <div id="planScroll" style="flex:1;overflow:auto;background:var(--bg);-webkit-overflow-scrolling:touch">
       <div style="position:relative;width:${viewerZoom*100}%;line-height:0">
         <img src="${planCache[activeDid(objId)]}" onclick="planClick(event,'${objId}')" style="width:100%;display:block;cursor:${drawing?'crosshair':'default'}">
         ${segOverlaySvg(objId)}
-        ${pinsOverlayHtml(objId, drawing)}
-        ${devicesOverlayHtml(objId, drawing)}
+        <div class="pins-ov" style="position:absolute;inset:0;pointer-events:none">${pinsOverlayHtml(objId, drawing)}</div>
+        <div class="dev-ov" style="position:absolute;inset:0;pointer-events:none">${devicesOverlayHtml(objId, drawing)}</div>
       </div>
     </div>`;
+  const ns = document.getElementById('planScroll');
+  if (ns) { ns.scrollLeft = sx; ns.scrollTop = sy; } // вернуть прокрутку на место
 }
 function cancelPlacing(objId) {
   placingShleyfId = null;
@@ -1770,7 +1794,7 @@ function startDrawingSeg(objId) {
 function undoSegPoint(objId) {
   if (!segPoints.length) return;
   segPoints.pop();
-  refreshPlan(objId);
+  updateOverlays(objId);
 }
 // линию нарисовали — пока не сохраняем, а спрашиваем, к какому шлейфу её отнести
 let pendingSeg = null; // { objId, drawingId, points }
