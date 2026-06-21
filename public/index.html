@@ -208,6 +208,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
            onkeydown="if(event.key==='Enter')doLogin()">
     <button class="btn btn-primary" onclick="doLogin()" style="margin-top:12px">Войти</button>
     <div class="login-hint">Личный код выдаёт инженер.<br>Инженер входит своим кодом.</div>
+    <button class="btn btn-secondary" id="loginInstallBtn" onclick="installApp()" style="display:none;margin-top:16px;width:100%">📲 Установить приложение на телефон</button>
   </div>
 </div>
 
@@ -225,6 +226,16 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 
   <div class="offline-banner" id="offlineBanner">
     ⚡ Офлайн — записи сохраняются локально
+  </div>
+
+  <div id="installBar" style="display:none;align-items:center;gap:10px;padding:10px 12px;background:var(--bg2);border-bottom:1px solid var(--border)">
+    <div style="width:34px;height:34px;border-radius:8px;overflow:hidden;flex-shrink:0"><img src="/icon-192.png" alt="" style="width:100%;height:100%;display:block"></div>
+    <div style="flex:1;min-width:0">
+      <div style="font-size:14px;font-weight:600;color:var(--text);line-height:1.2">Установить «ОПС» на телефон</div>
+      <div style="font-size:12px;color:var(--text3);line-height:1.2">Иконка на экране, запуск без браузера</div>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="installApp()">Установить</button>
+    <button onclick="dismissInstall()" aria-label="Скрыть" style="background:none;border:none;color:var(--text3);font-size:20px;cursor:pointer;padding:2px 4px">✕</button>
   </div>
 
   <div class="content" id="mainContent">
@@ -469,6 +480,26 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 
 <input type="file" id="planFileInput" accept="image/*,application/pdf,.pdf" style="display:none" onchange="handlePlanFile(event)">
 
+<div id="iosInstall" style="display:none;position:fixed;inset:0;z-index:400;background:rgba(0,0,0,.75);align-items:flex-end" onclick="if(event.target===this)closeIosInstall()">
+  <div style="background:var(--bg2);width:100%;border-radius:18px 18px 0 0;padding:22px 18px;padding-bottom:calc(22px + env(safe-area-inset-bottom));max-height:80vh;overflow:auto">
+    <div style="font-size:18px;font-weight:700;color:var(--text);margin-bottom:4px">Установка на iPhone</div>
+    <div style="font-size:13px;color:var(--text3);margin-bottom:16px">В Safari, за 3 шага:</div>
+    <div style="display:flex;gap:12px;align-items:flex-start;margin-bottom:14px">
+      <div style="width:26px;height:26px;border-radius:50%;background:var(--accent);color:#fff;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">1</div>
+      <div style="font-size:15px;color:var(--text);padding-top:2px">Нажмите кнопку <b>«Поделиться»</b> внизу экрана <span style="color:var(--accent)">⬆️</span></div>
+    </div>
+    <div style="display:flex;gap:12px;align-items:flex-start;margin-bottom:14px">
+      <div style="width:26px;height:26px;border-radius:50%;background:var(--accent);color:#fff;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">2</div>
+      <div style="font-size:15px;color:var(--text);padding-top:2px">Пролистайте и выберите <b>«На экран Домой»</b></div>
+    </div>
+    <div style="display:flex;gap:12px;align-items:flex-start;margin-bottom:18px">
+      <div style="width:26px;height:26px;border-radius:50%;background:var(--accent);color:#fff;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">3</div>
+      <div style="font-size:15px;color:var(--text);padding-top:2px">Нажмите <b>«Добавить»</b> — иконка появится на экране</div>
+    </div>
+    <button class="btn btn-secondary" onclick="closeIosInstall()" style="width:100%">Понятно</button>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.min.js"></script>
@@ -509,16 +540,31 @@ function visibleObjects() {
 // ─── Offline detection ───
 window.addEventListener('online',  () => { state.isOnline = true;  updateOfflineBanner(); syncAll(); });
 window.addEventListener('offline', () => { state.isOnline = false; updateOfflineBanner(); });
-// установка на телефон (Android Chrome даёт системный диалог; на iOS — через «Поделиться»)
+// ─── Установка на телефон (PWA) ───
 let deferredInstall = null;
-window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; });
-function installApp() {
-  if (deferredInstall) { deferredInstall.prompt(); deferredInstall = null; return; }
-  if (window.matchMedia('(display-mode: standalone)').matches || navigator.standalone) { showToast('Приложение уже установлено'); return; }
-  showToast('iPhone: «Поделиться» → «На экран Домой». Android: меню браузера → «Установить приложение».', 5000);
+function isStandalone() { return window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true; }
+function isIOS() { return /iphone|ipad|ipod/i.test(navigator.userAgent); }
+function maybeShowInstall() {
+  const show = !isStandalone() && localStorage.getItem('ops_install_hide') !== '1' && (deferredInstall || isIOS());
+  const bar = document.getElementById('installBar'); if (bar) bar.style.display = show ? 'flex' : 'none';
+  const btn = document.getElementById('loginInstallBtn'); if (btn) btn.style.display = show ? 'block' : 'none';
 }
+function dismissInstall() { localStorage.setItem('ops_install_hide', '1'); maybeShowInstall(); }
+function installApp() {
+  if (deferredInstall) {
+    deferredInstall.prompt();
+    deferredInstall.userChoice.finally(() => { deferredInstall = null; maybeShowInstall(); });
+    return;
+  }
+  if (isStandalone()) { showToast('Приложение уже установлено'); return; }
+  if (isIOS()) { const m = document.getElementById('iosInstall'); if (m) m.style.display = 'flex'; return; }
+  showToast('Меню браузера → «Установить приложение»', 4000);
+}
+function closeIosInstall() { const m = document.getElementById('iosInstall'); if (m) m.style.display = 'none'; }
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; maybeShowInstall(); });
+window.addEventListener('appinstalled', () => { deferredInstall = null; maybeShowInstall(); showToast('✅ Приложение установлено'); });
 
-const APP_VERSION = 'v34'; // видимая метка версии — должна совпадать с кэшем в sw.js
+const APP_VERSION = 'v35'; // видимая метка версии — должна совпадать с кэшем в sw.js
 function updateOfflineBanner() {
   const banner = document.getElementById('offlineBanner');
   banner.classList.toggle('show', !state.isOnline);
@@ -2535,6 +2581,7 @@ function showToast(msg, duration = 2500) {
 // ─── Init ───
 function init() {
   if ('serviceWorker' in navigator) { navigator.serviceWorker.register('/sw.js').catch(() => {}); }
+  maybeShowInstall();
   if (!state.user || !state.user.token) {
     showLogin();
   } else {
