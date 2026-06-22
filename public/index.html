@@ -564,7 +564,7 @@ function closeIosInstall() { const m = document.getElementById('iosInstall'); if
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; maybeShowInstall(); });
 window.addEventListener('appinstalled', () => { deferredInstall = null; maybeShowInstall(); showToast('✅ Приложение установлено'); });
 
-const APP_VERSION = 'v35'; // видимая метка версии — должна совпадать с кэшем в sw.js
+const APP_VERSION = 'v36'; // видимая метка версии — должна совпадать с кэшем в sw.js
 function updateOfflineBanner() {
   const banner = document.getElementById('offlineBanner');
   banner.classList.toggle('show', !state.isOnline);
@@ -606,12 +606,28 @@ function renderScreen(name) {
 }
 
 // ─── Home ───
+// все проблемы по видимым объектам: проблемные приборы + проблемы из журнала
+function problemsList() {
+  const ids = new Set(visibleObjects().map(o => o.id));
+  const nameOf = id => (state.objects.find(o => o.id === id) || {}).name || 'Объект';
+  const out = [];
+  state.devices.filter(d => d.status === 'problem' && ids.has(d.objectId)).forEach(d => {
+    const sh = state.shleyfy.find(z => z.id === d.shleyfId);
+    out.push({ objId: d.objectId, objName: nameOf(d.objectId), title: `${devType(d.type).short} №${d.num || ''}`, sub: `${sh ? '🧵 ' + sh.name : ''}${d.note ? ' · ' + d.note : ''}`.replace(/^ · /, '').trim(), ts: d.ts || 0 });
+  });
+  allEntries().filter(e => e.problem && e.problem.trim() && ids.has(e.objectId)).forEach(e => {
+    out.push({ objId: e.objectId, objName: nameOf(e.objectId), title: e.problem.trim(), sub: e.userName || '', ts: e.ts || 0 });
+  });
+  return out.sort((a, b) => b.ts - a.ts);
+}
+
 function renderHome(c) {
   const today = new Date().toDateString();
   const myEntries = isEngineer() ? allEntries() : allEntries().filter(e => e.userName === myName());
   const todayEntries = myEntries.filter(e => new Date(e.ts).toDateString() === today);
   const pending = pendingTotal();
-  const openProblems = myEntries.filter(e => e.problem && e.problem.trim()).length;
+  const probs = problemsList();
+  const openProblems = probs.length;
   const objs = visibleObjects();
   const activeObjs = objs.filter(o => o.status === 'active').length;
   c.innerHTML = `
@@ -629,6 +645,13 @@ function renderHome(c) {
       <div class="quick-btn" onclick="takePhoto()"><div class="quick-btn-icon">📷</div><div class="quick-btn-label">Фото</div><div class="quick-btn-sub">Прикрепить</div></div>
       <div class="quick-btn" onclick="reportProblem()"><div class="quick-btn-icon">⚠️</div><div class="quick-btn-label">Проблема</div><div class="quick-btn-sub">Зафиксировать</div></div>
     </div>
+    ${probs.length ? `
+    <div class="section-header" style="color:var(--red)">⚠️ Проблемы (${probs.length})</div>
+    <div style="padding:0 14px 4px">${probs.slice(0, 40).map(p => `
+      <div class="obj-card" onclick="showObjectDetail('${p.objId}')">
+        <div style="font-weight:600;font-size:14px;color:var(--text);margin-bottom:3px">⚠️ ${p.title}</div>
+        <div style="font-size:12px;color:var(--text3)">🏗 ${p.objName}${p.sub ? ' · ' + p.sub : ''}</div>
+      </div>`).join('')}</div>` : ''}
     ${todayEntries.length > 0 ? `
     <div class="section-header">Сегодня</div>
     <div style="padding:0 14px">${todayEntries.sort((a,b)=>b.ts-a.ts).slice(0,3).map(e => entryCardHtml(e)).join('')}</div>` : ''}
