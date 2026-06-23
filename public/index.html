@@ -477,6 +477,15 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   </div>
 </div>
 
+<!-- Worker profile + stats -->
+<div class="modal-overlay" id="memberProfileModal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div id="memberProfileContent"></div>
+    <button class="btn btn-secondary" onclick="closeModal('memberProfileModal')" style="margin-top:12px">Закрыть</button>
+  </div>
+</div>
+
 <div class="modal-overlay" id="deviceDetailModal">
   <div class="modal">
     <div class="modal-handle"></div>
@@ -541,6 +550,27 @@ const STATUS_LABELS = { active:'В работе', paused:'Приостановл
 function isEngineer() { return state.user?.role === 'engineer' || state.user?.role === 'admin'; }
 function myName() { return state.user?.name || 'Монтажник'; }
 function allEntries() { return [...state.entries, ...state.pendingEntries]; }
+// статистика монтажника по имени за период (с момента since)
+function workerStats(name, since) {
+  const inP = ts => (ts || 0) >= since;
+  const ent = allEntries().filter(e => e.userName === name && inP(e.ts));
+  return {
+    entries: ent.length,
+    cable: ent.reduce((s, e) => s + (parseInt(e.cable) || 0), 0),
+    devices: state.devices.filter(d => d.author === name && inP(d.ts)).length,
+    logs: state.shleyfLog.filter(l => l.author === name && inP(l.ts)).length,
+    segs: state.planSegments.filter(s => s.author === name && inP(s.ts)).length,
+  };
+}
+function lastActivity(name) {
+  let m = 0;
+  allEntries().forEach(e => { if (e.userName === name && (e.ts || 0) > m) m = e.ts; });
+  state.devices.forEach(d => { if (d.author === name && (d.ts || 0) > m) m = d.ts; });
+  state.shleyfLog.forEach(l => { if (l.author === name && (l.ts || 0) > m) m = l.ts; });
+  state.planSegments.forEach(s => { if (s.author === name && (s.ts || 0) > m) m = s.ts; });
+  return m;
+}
+function isActiveWorker(name) { const la = lastActivity(name); return la > 0 && (Date.now() - la) < 7 * 24 * 3600 * 1000; }
 
 // Objects the current user is allowed to see
 function visibleObjects() {
@@ -576,7 +606,7 @@ function closeIosInstall() { const m = document.getElementById('iosInstall'); if
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; maybeShowInstall(); });
 window.addEventListener('appinstalled', () => { deferredInstall = null; maybeShowInstall(); showToast('✅ Приложение установлено'); });
 
-const APP_VERSION = 'v37'; // видимая метка версии — должна совпадать с кэшем в sw.js
+const APP_VERSION = 'v38'; // видимая метка версии — должна совпадать с кэшем в sw.js
 function updateOfflineBanner() {
   const banner = document.getElementById('offlineBanner');
   banner.classList.toggle('show', !state.isOnline);
@@ -769,16 +799,22 @@ function renderProfile(c) {
           <button class="btn btn-primary btn-sm" onclick="addTeamMember()">+ Добавить</button>
         </div>
         ${state.team.length === 0 ? `<div style="font-size:13px;color:var(--text3)">Монтажников пока нет. Добавьте, чтобы назначать на объекты.</div>` :
-          state.team.map(t => `<div class="entry-card" style="display:flex;justify-content:space-between;align-items:center;gap:8px">
-            <div>
-              <div>👷 ${t.name}</div>
+          state.team.map(t => {
+            const active = isActiveWorker(t.name);
+            return `<div class="entry-card" style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+            <div onclick="showMemberProfile('${t.id}')" style="cursor:pointer;flex:1;min-width:0">
+              <div style="display:flex;align-items:center;gap:7px">
+                <span title="${active?'активен':'давно неактивен'}" style="width:8px;height:8px;border-radius:50%;background:${active?'var(--green)':'var(--text3)'};flex-shrink:0"></span>
+                <span>👷 ${t.name}</span>
+              </div>
               <div class="member-code">Код входа: <b>${t.code || '—'}</b></div>
             </div>
             <div style="display:flex;gap:6px;flex-shrink:0">
               ${t.code ? `<button class="btn btn-secondary btn-sm" onclick="copyCode('${t.code}')">Копир.</button>` : `<button class="btn btn-secondary btn-sm" onclick="genCode('${t.id}')">Код</button>`}
               <button class="btn btn-danger btn-sm" onclick="removeTeamMember('${t.id}')">×</button>
             </div>
-          </div>`).join('')}
+          </div>`;
+          }).join('')}
       </div>` : ''}
 
       <div class="card" style="margin:0 0 12px">
@@ -861,6 +897,36 @@ function genCode(id) {
 function copyCode(code) {
   if (navigator.clipboard) navigator.clipboard.writeText(code).then(() => showToast('Скопировано: ' + code)).catch(() => showToast('Код: ' + code));
   else showToast('Код: ' + code);
+}
+// профиль монтажника: назначенные объекты + статистика за неделю и месяц
+function showMemberProfile(id) {
+  const t = state.team.find(x => x.id === id);
+  if (!t) return;
+  const w = workerStats(t.name, Date.now() - 7 * 24 * 3600 * 1000);
+  const mo = workerStats(t.name, Date.now() - 30 * 24 * 3600 * 1000);
+  const la = lastActivity(t.name);
+  const objs = state.objects.filter(o => Array.isArray(o.assignedTo) && o.assignedTo.includes(id));
+  const statGrid = s => `<div class="stats-grid">
+      <div class="stat-card"><div class="stat-val">${s.cable}</div><div class="stat-lbl">Кабель, м</div></div>
+      <div class="stat-card"><div class="stat-val">${s.devices}</div><div class="stat-lbl">Приборы</div></div>
+      <div class="stat-card"><div class="stat-val">${s.entries}</div><div class="stat-lbl">Записей</div></div>
+      <div class="stat-card"><div class="stat-val">${s.logs}</div><div class="stat-lbl">Отметок</div></div>
+    </div>`;
+  document.getElementById('memberProfileContent').innerHTML = `
+    <div style="text-align:center;margin-bottom:14px">
+      <div style="font-size:42px">👷</div>
+      <div style="font-size:18px;font-weight:600">${t.name}</div>
+      <div style="font-size:13px;color:var(--text3);margin-top:2px">Монтажник · код входа <b>${t.code || '—'}</b></div>
+      <div style="font-size:12px;color:${la && (Date.now()-la)<7*24*3600*1000 ? 'var(--green)':'var(--text3)'};margin-top:4px">${la ? 'Последняя активность: ' + fmtLogDate(la) : 'Активности пока нет'}</div>
+    </div>
+    <div class="card-title">Назначенные объекты (${objs.length})</div>
+    <div style="font-size:13px;color:var(--text2);margin-bottom:16px">${objs.length ? objs.map(o => '🏗 ' + o.name).join('<br>') : '—'}</div>
+    <div class="card-title">За неделю</div>
+    <div style="margin-bottom:14px">${statGrid(w)}</div>
+    <div class="card-title">За месяц</div>
+    ${statGrid(mo)}
+  `;
+  showModal('memberProfileModal');
 }
 
 // ─── Team management ───
