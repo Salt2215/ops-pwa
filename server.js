@@ -152,6 +152,7 @@ async function initDB() {
     );
     ALTER TABLE pwa_objects ADD COLUMN IF NOT EXISTS assigned_to TEXT DEFAULT '';
     ALTER TABLE pwa_messages ADD COLUMN IF NOT EXISTS object_id TEXT;
+    ALTER TABLE pwa_messages ADD COLUMN IF NOT EXISTS image TEXT;
     ALTER TABLE pwa_team    ADD COLUMN IF NOT EXISTS login_code TEXT;
     ALTER TABLE pwa_entries ADD COLUMN IF NOT EXISTS user_name TEXT;
     ALTER TABLE pwa_shleyfy ADD COLUMN IF NOT EXISTS pin_x REAL;
@@ -698,7 +699,10 @@ app.post('/api/drawings/delete', auth, async (req, res) => {
 
 // Чат: «Общий» канал (object_id пустой) + отдельный канал на каждый объект.
 // Монтажник видит общий канал и каналы только своих объектов; инженер — все.
-const mapMsg = m => ({ id: m.id, userName: m.user_name, role: m.role, text: m.text, ts: m.ts, objectId: m.object_id || '' });
+// Фото хранится в pwa_messages.image, но в списке НЕ отдаётся (только флаг hasImage),
+// сама картинка тянется по тапу через /api/message-image/:id (как чертежи).
+const MSG_COLS = "id, user_name, role, text, ts, object_id, (image IS NOT NULL AND image <> '') AS has_image";
+const mapMsg = m => ({ id: m.id, userName: m.user_name, role: m.role, text: m.text, ts: m.ts, objectId: m.object_id || '', hasImage: !!m.has_image });
 
 async function canAccessObject(user, objectId) {
   if (isEngineer(user)) return true;
@@ -712,12 +716,12 @@ app.get('/api/messages', auth, async (req, res) => {
     if (objectId) {
       if (!(await canAccessObject(req.user, objectId))) return res.status(403).json({ error: 'forbidden' });
       const { rows } = await pool.query(
-        'SELECT * FROM (SELECT * FROM pwa_messages WHERE object_id=$1 ORDER BY ts DESC LIMIT 200) m ORDER BY ts ASC', [objectId]);
-      return res.json({ messages: rows.map(mapMsg) });
+        `SELECT ${MSG_COLS} FROM pwa_messages WHERE object_id=$1 ORDER BY ts DESC LIMIT 200`, [objectId]);
+      return res.json({ messages: rows.reverse().map(mapMsg) });
     }
     const { rows } = await pool.query(
-      "SELECT * FROM (SELECT * FROM pwa_messages WHERE object_id IS NULL OR object_id='' ORDER BY ts DESC LIMIT 200) m ORDER BY ts ASC");
-    res.json({ messages: rows.map(mapMsg) });
+      `SELECT ${MSG_COLS} FROM pwa_messages WHERE object_id IS NULL OR object_id='' ORDER BY ts DESC LIMIT 200`);
+    res.json({ messages: rows.reverse().map(mapMsg) });
   } catch (e) { console.error(e); res.status(500).json({ error: e.message }); }
 });
 
@@ -725,13 +729,25 @@ app.post('/api/messages', auth, async (req, res) => {
   try {
     const { id, text, ts } = req.body;
     const objectId = (req.body.objectId || '').trim();
-    if (!text || !text.trim()) return res.status(400).json({ error: 'empty' });
+    const image = typeof req.body.image === 'string' ? req.body.image : '';
+    if ((!text || !text.trim()) && !image) return res.status(400).json({ error: 'empty' });
+    if (image && image.length > 6000000) return res.status(413).json({ error: 'image too large' });
     if (objectId && !(await canAccessObject(req.user, objectId))) return res.status(403).json({ error: 'forbidden' });
     await pool.query(
-      'INSERT INTO pwa_messages (id,uid,user_name,role,text,ts,object_id) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (id) DO NOTHING',
-      [id, req.user.uid, req.user.name, req.user.role, text.trim().slice(0, 2000), ts || Date.now(), objectId || null]
+      'INSERT INTO pwa_messages (id,uid,user_name,role,text,ts,object_id,image) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (id) DO NOTHING',
+      [id, req.user.uid, req.user.name, req.user.role, (text || '').trim().slice(0, 2000), ts || Date.now(), objectId || null, image || null]
     );
     res.json({ ok: true });
+  } catch (e) { console.error(e); res.status(500).json({ error: e.message }); }
+});
+
+// Картинка сообщения — отдаём по требованию (с проверкой доступа к каналу объекта)
+app.get('/api/message-image/:id', auth, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT object_id, image FROM pwa_messages WHERE id=$1', [req.params.id]);
+    if (!rows[0]) return res.status(404).json({ error: 'not found' });
+    if (rows[0].object_id && !(await canAccessObject(req.user, rows[0].object_id))) return res.status(403).json({ error: 'forbidden' });
+    res.json({ id: req.params.id, image: rows[0].image || '' });
   } catch (e) { console.error(e); res.status(500).json({ error: e.message }); }
 });
 
