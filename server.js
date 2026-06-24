@@ -151,6 +151,7 @@ async function initDB() {
       created_at TIMESTAMP DEFAULT NOW()
     );
     ALTER TABLE pwa_objects ADD COLUMN IF NOT EXISTS assigned_to TEXT DEFAULT '';
+    ALTER TABLE pwa_messages ADD COLUMN IF NOT EXISTS object_id TEXT;
     ALTER TABLE pwa_team    ADD COLUMN IF NOT EXISTS login_code TEXT;
     ALTER TABLE pwa_entries ADD COLUMN IF NOT EXISTS user_name TEXT;
     ALTER TABLE pwa_shleyfy ADD COLUMN IF NOT EXISTS pin_x REAL;
@@ -695,23 +696,62 @@ app.post('/api/drawings/delete', auth, async (req, res) => {
   }
 });
 
-// Чат — общий канал для всех вошедших
+// Чат: «Общий» канал (object_id пустой) + отдельный канал на каждый объект.
+// Монтажник видит общий канал и каналы только своих объектов; инженер — все.
+const mapMsg = m => ({ id: m.id, userName: m.user_name, role: m.role, text: m.text, ts: m.ts, objectId: m.object_id || '' });
+
+async function canAccessObject(user, objectId) {
+  if (isEngineer(user)) return true;
+  const o = await pool.query('SELECT assigned_to FROM pwa_objects WHERE id=$1', [objectId]);
+  return !!(o.rows[0] && safeArr(o.rows[0].assigned_to).includes(user.teamId));
+}
+
 app.get('/api/messages', auth, async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM (SELECT * FROM pwa_messages ORDER BY ts DESC LIMIT 200) m ORDER BY ts ASC');
-    res.json({ messages: rows.map(m => ({ id: m.id, userName: m.user_name, role: m.role, text: m.text, ts: m.ts })) });
+    const objectId = (req.query.objectId || '').trim();
+    if (objectId) {
+      if (!(await canAccessObject(req.user, objectId))) return res.status(403).json({ error: 'forbidden' });
+      const { rows } = await pool.query(
+        'SELECT * FROM (SELECT * FROM pwa_messages WHERE object_id=$1 ORDER BY ts DESC LIMIT 200) m ORDER BY ts ASC', [objectId]);
+      return res.json({ messages: rows.map(mapMsg) });
+    }
+    const { rows } = await pool.query(
+      "SELECT * FROM (SELECT * FROM pwa_messages WHERE object_id IS NULL OR object_id='' ORDER BY ts DESC LIMIT 200) m ORDER BY ts ASC");
+    res.json({ messages: rows.map(mapMsg) });
   } catch (e) { console.error(e); res.status(500).json({ error: e.message }); }
 });
 
 app.post('/api/messages', auth, async (req, res) => {
   try {
     const { id, text, ts } = req.body;
+    const objectId = (req.body.objectId || '').trim();
     if (!text || !text.trim()) return res.status(400).json({ error: 'empty' });
+    if (objectId && !(await canAccessObject(req.user, objectId))) return res.status(403).json({ error: 'forbidden' });
     await pool.query(
-      'INSERT INTO pwa_messages (id,uid,user_name,role,text,ts) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO NOTHING',
-      [id, req.user.uid, req.user.name, req.user.role, text.trim().slice(0, 2000), ts || Date.now()]
+      'INSERT INTO pwa_messages (id,uid,user_name,role,text,ts,object_id) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (id) DO NOTHING',
+      [id, req.user.uid, req.user.name, req.user.role, text.trim().slice(0, 2000), ts || Date.now(), objectId || null]
     );
     res.json({ ok: true });
+  } catch (e) { console.error(e); res.status(500).json({ error: e.message }); }
+});
+
+// Сводка по каналам (для бейджа непрочитанных и точек на вкладках) — без текста, легко.
+app.get('/api/chat/overview', auth, async (req, res) => {
+  try {
+    let visible = null; // null = инженер (все объекты)
+    if (!isEngineer(req.user)) {
+      const all = (await pool.query('SELECT id, assigned_to FROM pwa_objects')).rows;
+      visible = new Set(all.filter(o => safeArr(o.assigned_to).includes(req.user.teamId)).map(o => o.id));
+    }
+    const { rows } = await pool.query(
+      `SELECT COALESCE(object_id,'') AS channel, COUNT(*)::int AS total, MAX(ts) AS last_ts,
+              (ARRAY_AGG(id        ORDER BY ts DESC))[1] AS last_id,
+              (ARRAY_AGG(user_name ORDER BY ts DESC))[1] AS last_user
+         FROM pwa_messages GROUP BY COALESCE(object_id,'')`);
+    const channels = rows
+      .filter(r => r.channel === '' || visible === null || visible.has(r.channel))
+      .map(r => ({ objectId: r.channel, total: r.total, lastTs: Number(r.last_ts), lastId: r.last_id, lastUser: r.last_user || '' }));
+    res.json({ channels });
   } catch (e) { console.error(e); res.status(500).json({ error: e.message }); }
 });
 
