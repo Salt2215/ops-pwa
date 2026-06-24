@@ -194,6 +194,12 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 .chat-date { align-self: center; font-size: 11px; color: var(--text3); background: var(--bg3); padding: 3px 12px; border-radius: 12px; margin: 8px 0 2px; }
 .chat-jump { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(112px + env(safe-area-inset-bottom)); background: var(--accent); color: #fff; border: none; border-radius: 20px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; z-index: 9; box-shadow: 0 4px 16px rgba(79,127,255,.4); }
 .chat-retry { cursor: pointer; text-decoration: underline; }
+/* Каналы чата (Общий + по объектам) */
+.chat-channels { position: sticky; top: 0; z-index: 8; display: flex; gap: 6px; overflow-x: auto; padding: 8px 12px; background: var(--bg2); border-bottom: 1px solid var(--border); -webkit-overflow-scrolling: touch; }
+.chat-channels::-webkit-scrollbar { display: none; }
+.chat-chip { position: relative; flex-shrink: 0; background: var(--bg3); border: 1px solid var(--border); color: var(--text2); border-radius: 16px; padding: 6px 12px; font-size: 13px; font-family: var(--font); cursor: pointer; white-space: nowrap; }
+.chat-chip-active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.chat-chip-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--red); margin-left: 6px; vertical-align: middle; }
 #reportView { display:none; position:fixed; inset:0; z-index:500; background:#fff; color:#111; overflow:auto; -webkit-overflow-scrolling:touch; }
 #reportView table { width:100%; border-collapse:collapse; font-size:13px; margin-top:6px; }
 #reportView th, #reportView td { border:1px solid #d0d0d0; padding:6px 8px; text-align:left; }
@@ -542,6 +548,8 @@ let state = {
   drawings: JSON.parse(localStorage.getItem('ops_drawings') || '[]'),
   messages: JSON.parse(localStorage.getItem('ops_messages') || '[]'),
   pendingMsgs: [],
+  chatChannel: localStorage.getItem('ops_chat_channel') || '', // '' = «Общий», иначе objectId
+  chatOverview: [], // сводка по каналам с сервера (для бейджа и точек)
   currentScreen: 'home',
   isOnline: navigator.onLine,
 };
@@ -606,7 +614,7 @@ function closeIosInstall() { const m = document.getElementById('iosInstall'); if
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; maybeShowInstall(); });
 window.addEventListener('appinstalled', () => { deferredInstall = null; maybeShowInstall(); showToast('✅ Приложение установлено'); });
 
-const APP_VERSION = 'v39'; // видимая метка версии — должна совпадать с кэшем в sw.js
+const APP_VERSION = 'v40'; // видимая метка версии — должна совпадать с кэшем в sw.js
 function updateOfflineBanner() {
   const banner = document.getElementById('offlineBanner');
   banner.classList.toggle('show', !state.isOnline);
@@ -623,17 +631,20 @@ function showScreen(name) {
   document.getElementById(`nav-${name}`).classList.add('active');
   const fab = document.getElementById('fabBtn');
   fab.style.display = ['home','journal'].includes(name) ? 'flex' : 'none';
-  const titles = { home: 'ОПС Журнал', objects: 'Объекты', projects: 'Проекты', journal: 'Журнал работ', chat: 'Чат бригады', profile: 'Профиль' };
+  const titles = { home: 'ОПС Журнал', objects: 'Объекты', projects: 'Проекты', journal: 'Журнал работ', chat: 'Чат', profile: 'Профиль' };
   document.getElementById('headerTitle').textContent = titles[name];
   renderScreen(name);
   if (chatPollTimer) { clearInterval(chatPollTimer); chatPollTimer = null; }
+  if (chatOverviewTimer) { clearInterval(chatOverviewTimer); chatOverviewTimer = null; }
   if (name === 'chat') {
     if (bgPollTimer) { clearInterval(bgPollTimer); bgPollTimer = null; }
-    markChatSeen();
-    pollMessages();
+    pollMessages();        // подтянет канал и отметит прочитанным
+    pollOverview();        // точки на вкладках
     chatPollTimer = setInterval(pollMessages, 4000);
-  } else if (!bgPollTimer && state.user?.token) {
-    bgPollTimer = setInterval(pollMessages, 10000);
+    chatOverviewTimer = setInterval(pollOverview, 8000);
+  } else if (state.user?.token) {
+    pollOverview();        // обновим бейдж при заходе на любой экран
+    if (!bgPollTimer) bgPollTimer = setInterval(pollOverview, 10000);
   }
   updateChatBadge();
 }
@@ -862,7 +873,7 @@ async function doLogin() {
     const data = await res.json();
     state.user = { token: data.token, name: data.name, role: data.role, teamId: data.teamId || null };
     // чистим локальные данные — дальше всё придёт с сервера по роли
-    state.objects = []; state.entries = []; state.pendingEntries = []; state.team = []; state.projects = []; state.messages = []; state.pendingMsgs = []; localStorage.removeItem('ops_chat_seen');
+    state.objects = []; state.entries = []; state.pendingEntries = []; state.team = []; state.projects = []; state.messages = []; state.pendingMsgs = []; state.chatChannel = ''; state.chatOverview = []; localStorage.removeItem('ops_chat_channel'); clearChatSeen();
     input.value = '';
     saveLocal();
     startApp();
@@ -1280,6 +1291,7 @@ async function syncEntry(entry) {
 // ─── Chat ───
 let chatPollTimer = null;
 let bgPollTimer = null;
+let chatOverviewTimer = null;
 let chatLastRenderedId = null;
 
 function escapeText(t) {
@@ -1297,34 +1309,76 @@ function dateLabel(ts) {
   return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
 
+function seenKey(ch) { return 'ops_chat_seen:' + (ch || ''); }
+
+// Список каналов: «Общий» + видимые пользователю объекты
+function channelList() {
+  return [{ id: '', name: 'Общий' }, ...visibleObjects().map(o => ({ id: o.id, name: o.name }))];
+}
+
 function getChatMessages() {
+  const ch = state.chatChannel || '';
   const serverIds = new Set((state.messages || []).map(m => m.id));
-  const pend = (state.pendingMsgs || []).filter(m => !serverIds.has(m.id));
+  const pend = (state.pendingMsgs || []).filter(m => (m.objectId || '') === ch && !serverIds.has(m.id));
   return [...(state.messages || []), ...pend].sort((a, b) => Number(a.ts) - Number(b.ts));
 }
-function unreadCount() {
-  const msgs = state.messages || [];
-  const seen = localStorage.getItem('ops_chat_seen') || '';
-  let after;
-  if (!seen) after = msgs;
-  else { const idx = msgs.findIndex(m => m.id === seen); after = idx >= 0 ? msgs.slice(idx + 1) : msgs; }
-  return after.filter(m => m.userName !== myName()).length;
+
+// Есть ли в канале новые сообщения (от других) с момента последнего просмотра
+function channelUnread(chId) {
+  chId = chId || '';
+  if (state.currentScreen === 'chat' && (state.chatChannel || '') === chId) return false; // открытый канал = прочитан
+  const ov = (state.chatOverview || []).find(c => (c.objectId || '') === chId);
+  if (!ov || !ov.lastId) return false;
+  if (ov.lastUser === myName()) return false; // последнее — моё
+  return localStorage.getItem(seenKey(chId)) !== ov.lastId;
 }
+function unreadChannels() { return channelList().filter(ch => channelUnread(ch.id)).length; }
+
 function updateChatBadge() {
   const el = document.getElementById('chatBadge');
   if (!el) return;
-  const n = unreadCount();
-  if (n > 0) { el.textContent = n > 99 ? '99+' : String(n); el.style.display = 'flex'; }
+  const n = unreadChannels();
+  if (n > 0) { el.textContent = n > 9 ? '9+' : String(n); el.style.display = 'flex'; }
   else el.style.display = 'none';
 }
 function markChatSeen() {
+  const ch = state.chatChannel || '';
   const msgs = state.messages || [];
-  if (msgs.length) localStorage.setItem('ops_chat_seen', msgs[msgs.length - 1].id);
+  if (msgs.length) localStorage.setItem(seenKey(ch), msgs[msgs.length - 1].id);
   updateChatBadge();
+  if (state.currentScreen === 'chat') updateChannelChips();
+}
+function clearChatSeen() {
+  Object.keys(localStorage).filter(k => k.indexOf('ops_chat_seen') === 0).forEach(k => localStorage.removeItem(k));
+}
+
+function channelChipsHtml() {
+  const cur = state.chatChannel || '';
+  return channelList().map(ch => {
+    const active = (ch.id || '') === cur;
+    const dot = channelUnread(ch.id) ? '<span class="chat-chip-dot"></span>' : '';
+    return `<button class="chat-chip ${active ? 'chat-chip-active' : ''}" onclick="switchChatChannel('${ch.id}')">${ch.id === '' ? '👥 ' : '🏗 '}${escapeText(ch.name)}${dot}</button>`;
+  }).join('');
+}
+function updateChannelChips() {
+  const el = document.getElementById('chatChannels');
+  if (el) el.innerHTML = channelChipsHtml();
+}
+function switchChatChannel(ch) {
+  ch = ch || '';
+  if ((state.chatChannel || '') === ch) { scrollChatBottom(); return; }
+  state.chatChannel = ch;
+  localStorage.setItem('ops_chat_channel', ch);
+  state.messages = [];          // придёт по выбранному каналу
+  chatLastRenderedId = null;
+  renderChat(document.getElementById('mainContent'));
+  pollMessages();
+  pollOverview();
 }
 
 function renderChat(c) {
   c.innerHTML = `
+    <div class="chat-channels" id="chatChannels">${channelChipsHtml()}</div>
     <div class="chat-list" id="chatMessages"></div>
     <button class="chat-jump" id="chatJump" onclick="scrollChatBottom()" style="display:none">↓ новые сообщения</button>
     <div class="chat-input-bar">
@@ -1349,7 +1403,8 @@ function renderChatMessages(forceScroll) {
   const nearBottom = content ? (content.scrollHeight - content.scrollTop - content.clientHeight < 90) : true;
   const msgs = getChatMessages();
   if (msgs.length === 0) {
-    box.innerHTML = `<div class="empty" style="margin-top:30px"><div class="empty-icon">💬</div><div class="empty-text">Сообщений пока нет.<br>Напишите первым!</div></div>`;
+    const isObj = (state.chatChannel || '') !== '';
+    box.innerHTML = `<div class="empty" style="margin-top:30px"><div class="empty-icon">💬</div><div class="empty-text">${isObj ? 'В чате этого объекта пока пусто.' : 'Сообщений пока нет.'}<br>Напишите первым!</div></div>`;
     chatLastRenderedId = null;
     return;
   }
@@ -1386,17 +1441,33 @@ function renderChatMessages(forceScroll) {
 
 async function pollMessages() {
   if (!state.isOnline || !state.user?.token) return;
+  const ch = state.chatChannel || '';
   try {
-    const res = await fetch(`${API_URL}/api/messages`, { headers: { 'Authorization': `Bearer ${state.user.token}` } });
+    const url = ch ? `${API_URL}/api/messages?objectId=${encodeURIComponent(ch)}` : `${API_URL}/api/messages`;
+    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${state.user.token}` } });
     if (!res.ok) return;
     const data = await res.json();
     if (!Array.isArray(data.messages)) return;
+    if ((state.chatChannel || '') !== ch) return; // канал переключили, пока ждали ответ
     state.messages = data.messages;
     const sids = new Set(data.messages.map(m => m.id));
     state.pendingMsgs = (state.pendingMsgs || []).filter(m => !sids.has(m.id));
     saveLocal();
     if (state.currentScreen === 'chat') { renderChatMessages(false); markChatSeen(); }
-    else updateChatBadge();
+  } catch {}
+}
+
+// Лёгкая сводка по каналам — обновляет бейдж и точки на вкладках
+async function pollOverview() {
+  if (!state.isOnline || !state.user?.token) return;
+  try {
+    const res = await fetch(`${API_URL}/api/chat/overview`, { headers: { 'Authorization': `Bearer ${state.user.token}` } });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!Array.isArray(data.channels)) return;
+    state.chatOverview = data.channels;
+    updateChatBadge();
+    if (state.currentScreen === 'chat') updateChannelChips();
   } catch {}
 }
 
@@ -1406,7 +1477,7 @@ async function sendMessage() {
   const text = input.value.trim();
   if (!text) return;
   input.value = '';
-  const msg = { id: 'msg' + Date.now() + Math.floor(Math.random() * 1000), text, ts: Date.now(), userName: myName(), role: state.user?.role, status: 'sending' };
+  const msg = { id: 'msg' + Date.now() + Math.floor(Math.random() * 1000), text, ts: Date.now(), userName: myName(), role: state.user?.role, objectId: state.chatChannel || '', status: 'sending' };
   state.pendingMsgs = state.pendingMsgs || [];
   state.pendingMsgs.push(msg);
   renderChatMessages(true);
@@ -1418,11 +1489,12 @@ async function deliverMsg(msg) {
     const res = await fetch(`${API_URL}/api/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
-      body: JSON.stringify({ id: msg.id, text: msg.text, ts: msg.ts }),
+      body: JSON.stringify({ id: msg.id, text: msg.text, ts: msg.ts, objectId: msg.objectId || '' }),
     });
     if (!res.ok) throw new Error('http');
     setMsgStatus(msg.id, 'sent');
     pollMessages();
+    pollOverview();
   } catch { setMsgStatus(msg.id, 'failed'); }
 }
 function setMsgStatus(id, status) {
@@ -2799,7 +2871,7 @@ function startApp() {
   document.getElementById('loginScreen').classList.remove('show');
   updateOfflineBanner();
   showScreen('home');
-  if (state.isOnline && state.user?.token) { syncAll(true); pollMessages(); }
+  if (state.isOnline && state.user?.token) { syncAll(true); pollMessages(); pollOverview(); }
 }
 init();
 
