@@ -606,7 +606,7 @@ function closeIosInstall() { const m = document.getElementById('iosInstall'); if
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; maybeShowInstall(); });
 window.addEventListener('appinstalled', () => { deferredInstall = null; maybeShowInstall(); showToast('✅ Приложение установлено'); });
 
-const APP_VERSION = 'v38'; // видимая метка версии — должна совпадать с кэшем в sw.js
+const APP_VERSION = 'v39'; // видимая метка версии — должна совпадать с кэшем в sw.js
 function updateOfflineBanner() {
   const banner = document.getElementById('offlineBanner');
   banner.classList.toggle('show', !state.isOnline);
@@ -792,30 +792,30 @@ function renderProfile(c) {
         <div style="font-size:13px;color:var(--text3);margin-top:4px">${isEngineer()?'Инженер':'Монтажник'}</div>
       </div>
 
-      ${isEngineer() ? `
+      ${isEngineer() ? (() => {
+        const engineers = state.team.filter(isEngRole);
+        const workers = state.team.filter(t => !isEngRole(t));
+        return `
       <div class="card" style="margin:0 0 12px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-          <div class="card-title" style="margin:0">👷 Команда (${state.team.length})</div>
-          <button class="btn btn-primary btn-sm" onclick="addTeamMember()">+ Добавить</button>
+          <div class="card-title" style="margin:0">👑 Инженеры (${engineers.length})</div>
+          <button class="btn btn-primary btn-sm" onclick="addMember('engineer')">+ Добавить</button>
         </div>
-        ${state.team.length === 0 ? `<div style="font-size:13px;color:var(--text3)">Монтажников пока нет. Добавьте, чтобы назначать на объекты.</div>` :
-          state.team.map(t => {
-            const active = isActiveWorker(t.name);
-            return `<div class="entry-card" style="display:flex;justify-content:space-between;align-items:center;gap:8px">
-            <div onclick="showMemberProfile('${t.id}')" style="cursor:pointer;flex:1;min-width:0">
-              <div style="display:flex;align-items:center;gap:7px">
-                <span title="${active?'активен':'давно неактивен'}" style="width:8px;height:8px;border-radius:50%;background:${active?'var(--green)':'var(--text3)'};flex-shrink:0"></span>
-                <span>👷 ${t.name}</span>
-              </div>
-              <div class="member-code">Код входа: <b>${t.code || '—'}</b></div>
-            </div>
-            <div style="display:flex;gap:6px;flex-shrink:0">
-              ${t.code ? `<button class="btn btn-secondary btn-sm" onclick="copyCode('${t.code}')">Копир.</button>` : `<button class="btn btn-secondary btn-sm" onclick="genCode('${t.id}')">Код</button>`}
-              <button class="btn btn-danger btn-sm" onclick="removeTeamMember('${t.id}')">×</button>
-            </div>
-          </div>`;
-          }).join('')}
-      </div>` : ''}
+        ${engineers.length === 0
+          ? `<div style="font-size:13px;color:var(--text3)">Инженеров пока нет. Добавьте, чтобы у каждого был свой вход и личная статистика.</div>`
+          : engineers.map(memberRowHtml).join('')}
+        <div style="font-size:12px;color:var(--text3);margin-top:8px">Общий код инженера из настроек тоже работает — как запасной вход.</div>
+      </div>
+      <div class="card" style="margin:0 0 12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div class="card-title" style="margin:0">👷 Монтажники (${workers.length})</div>
+          <button class="btn btn-primary btn-sm" onclick="addMember('worker')">+ Добавить</button>
+        </div>
+        ${workers.length === 0
+          ? `<div style="font-size:13px;color:var(--text3)">Монтажников пока нет. Добавьте, чтобы назначать на объекты.</div>`
+          : workers.map(memberRowHtml).join('')}
+      </div>`;
+      })() : ''}
 
       <div class="card" style="margin:0 0 12px">
         <div class="card-title">${isEngineer()?'Сводка (вся бригада)':'Мои показатели'}</div>
@@ -902,6 +902,7 @@ function copyCode(code) {
 function showMemberProfile(id) {
   const t = state.team.find(x => x.id === id);
   if (!t) return;
+  const isEng = isEngRole(t);
   const w = workerStats(t.name, Date.now() - 7 * 24 * 3600 * 1000);
   const mo = workerStats(t.name, Date.now() - 30 * 24 * 3600 * 1000);
   const la = lastActivity(t.name);
@@ -914,13 +915,15 @@ function showMemberProfile(id) {
     </div>`;
   document.getElementById('memberProfileContent').innerHTML = `
     <div style="text-align:center;margin-bottom:14px">
-      <div style="font-size:42px">👷</div>
+      <div style="font-size:42px">${isEng ? '👑' : '👷'}</div>
       <div style="font-size:18px;font-weight:600">${t.name}</div>
-      <div style="font-size:13px;color:var(--text3);margin-top:2px">Монтажник · код входа <b>${t.code || '—'}</b></div>
+      <div style="font-size:13px;color:var(--text3);margin-top:2px">${isEng ? 'Инженер' : 'Монтажник'} · код входа <b>${t.code || '—'}</b></div>
       <div style="font-size:12px;color:${la && (Date.now()-la)<7*24*3600*1000 ? 'var(--green)':'var(--text3)'};margin-top:4px">${la ? 'Последняя активность: ' + fmtLogDate(la) : 'Активности пока нет'}</div>
     </div>
-    <div class="card-title">Назначенные объекты (${objs.length})</div>
-    <div style="font-size:13px;color:var(--text2);margin-bottom:16px">${objs.length ? objs.map(o => '🏗 ' + o.name).join('<br>') : '—'}</div>
+    ${isEng
+      ? `<div style="font-size:13px;color:var(--text3);margin-bottom:16px">Инженеру видны все объекты.</div>`
+      : `<div class="card-title">Назначенные объекты (${objs.length})</div>
+    <div style="font-size:13px;color:var(--text2);margin-bottom:16px">${objs.length ? objs.map(o => '🏗 ' + o.name).join('<br>') : '—'}</div>`}
     <div class="card-title">За неделю</div>
     <div style="margin-bottom:14px">${statGrid(w)}</div>
     <div class="card-title">За месяц</div>
@@ -930,15 +933,38 @@ function showMemberProfile(id) {
 }
 
 // ─── Team management ───
-function addTeamMember() {
-  const name = prompt('Имя монтажника:');
+function isEngRole(t) { return t && (t.role === 'engineer' || t.role === 'admin'); }
+
+// Общий рендер строки сотрудника (инженер или монтажник) в «Команде»
+function memberRowHtml(t) {
+  const active = isActiveWorker(t.name);
+  const icon = isEngRole(t) ? '👑' : '👷';
+  return `<div class="entry-card" style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+    <div onclick="showMemberProfile('${t.id}')" style="cursor:pointer;flex:1;min-width:0">
+      <div style="display:flex;align-items:center;gap:7px">
+        <span title="${active?'активен':'давно неактивен'}" style="width:8px;height:8px;border-radius:50%;background:${active?'var(--green)':'var(--text3)'};flex-shrink:0"></span>
+        <span>${icon} ${t.name}</span>
+      </div>
+      <div class="member-code">Код входа: <b>${t.code || '—'}</b></div>
+    </div>
+    <div style="display:flex;gap:6px;flex-shrink:0">
+      ${t.code ? `<button class="btn btn-secondary btn-sm" onclick="copyCode('${t.code}')">Копир.</button>` : `<button class="btn btn-secondary btn-sm" onclick="genCode('${t.id}')">Код</button>`}
+      <button class="btn btn-danger btn-sm" onclick="removeTeamMember('${t.id}')">×</button>
+    </div>
+  </div>`;
+}
+
+function addMember(role) {
+  const isEng = role === 'engineer';
+  const name = prompt(isEng ? 'Имя инженера:' : 'Имя монтажника:');
   if (!name || !name.trim()) return;
   const code = genUniqueCode();
-  state.team.push({ id: 'm' + Date.now(), name: name.trim(), role: 'worker', code });
+  state.team.push({ id: 'm' + Date.now(), name: name.trim(), role: isEng ? 'engineer' : 'worker', code });
   saveLocal(); syncTeam(); renderScreen('profile'); showToast('✅ Добавлен. Код входа: ' + code);
 }
 function removeTeamMember(id) {
-  if (!confirm('Удалить монтажника из команды?')) return;
+  const t = state.team.find(x => x.id === id);
+  if (!confirm(isEngRole(t) ? 'Удалить инженера из команды?' : 'Удалить монтажника из команды?')) return;
   state.team = state.team.filter(t => t.id !== id);
   state.objects.forEach(o => { if (Array.isArray(o.assignedTo)) o.assignedTo = o.assignedTo.filter(x => x !== id); });
   saveLocal(); syncTeam(); syncObjects(); renderScreen('profile'); showToast('Удалён');
@@ -1096,14 +1122,17 @@ function showObjectDetail(id) {
 
     ${isEngineer() ? `
     <div class="card-title">Монтажники на объекте</div>
-    ${state.team.length === 0 ? `<div style="font-size:13px;color:var(--text3);margin-bottom:6px">Добавьте монтажников в «Профиль → Команда».</div>` :
-      state.team.map(t => {
+    ${(() => {
+      const workers = state.team.filter(t => !isEngRole(t));
+      return workers.length === 0 ? `<div style="font-size:13px;color:var(--text3);margin-bottom:6px">Добавьте монтажников в «Профиль → Команда».</div>` :
+      workers.map(t => {
         const on = obj.assignedTo.includes(t.id);
         return `<div class="entry-card" style="display:flex;justify-content:space-between;align-items:center">
           <span>👷 ${t.name}</span>
           <button class="btn btn-sm ${on?'btn-primary':'btn-secondary'}" onclick="toggleAssign('${obj.id}','${t.id}')">${on?'Назначен ✓':'Назначить'}</button>
         </div>`;
-      }).join('')}
+      }).join('');
+    })()}
 
     ${Object.keys(byWorker).length > 0 ? `
     <div class="card-title" style="margin-top:14px">Прогресс по монтажникам</div>
