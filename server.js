@@ -197,11 +197,14 @@ app.post('/api/login', async (req, res) => {
     const { rows } = await pool.query('SELECT * FROM pwa_team WHERE login_code=$1', [code]);
     if (rows[0]) {
       const m = rows[0];
+      // роль берём из карточки сотрудника: инженер заходит под своей ролью (видит всё + личная статистика),
+      // монтажник — как раньше. Раньше тут было жёстко 'worker', из-за чего инженеры были неотличимы.
+      const role = (m.role === 'engineer' || m.role === 'admin') ? 'engineer' : 'worker';
       await pool.query(
         'INSERT INTO pwa_sessions (token,uid,name,role,team_id) VALUES ($1,$2,$3,$4,$5)',
-        [token, null, m.name, 'worker', m.id]
+        [token, null, m.name, role, m.id]
       );
-      return res.json({ token, name: m.name, role: 'worker', teamId: m.id });
+      return res.json({ token, name: m.name, role, teamId: m.id });
     }
 
     return res.status(403).json({ error: 'Неверный код' });
@@ -218,6 +221,32 @@ app.post('/api/logout', auth, async (req, res) => {
     await pool.query('DELETE FROM pwa_sessions WHERE token=$1', [token]);
     res.json({ ok: true });
   } catch (e) { res.json({ ok: true }); }
+});
+
+// Сохранение команды (только инженер). Клиент шлёт ВЕСЬ список — делаем upsert по id
+// и удаляем тех, кого в списке больше нет. Раньше этого маршрута не было, поэтому
+// добавленные через интерфейс люди не попадали в базу. Схему не меняем (колонки role и
+// login_code в pwa_team уже есть).
+app.post('/api/team/sync', auth, async (req, res) => {
+  try {
+    if (!isEngineer(req.user)) return res.status(403).json({ error: 'forbidden' });
+    const team = Array.isArray(req.body.team) ? req.body.team : [];
+    const ids = [];
+    for (const t of team) {
+      if (!t || !t.id) continue;
+      ids.push(t.id);
+      const role = (t.role === 'engineer' || t.role === 'admin') ? t.role : 'worker';
+      await pool.query(
+        `INSERT INTO pwa_team (id,name,role,login_code) VALUES ($1,$2,$3,$4)
+         ON CONFLICT (id) DO UPDATE SET name=$2, role=$3, login_code=$4`,
+        [t.id, (t.name || '').slice(0, 120), role, t.code || null]
+      );
+    }
+    // Удаляем выбывших — но только если в списке кто-то есть. Пустой список не трогает базу
+    // (защита от случайного стирания всей команды до первой синхронизации).
+    if (ids.length) await pool.query('DELETE FROM pwa_team WHERE id <> ALL($1)', [ids]);
+    res.json({ ok: true });
+  } catch (e) { console.error(e); res.status(500).json({ error: e.message }); }
 });
 
 // Синхронизация — данные по роли
