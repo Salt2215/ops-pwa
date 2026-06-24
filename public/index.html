@@ -200,6 +200,12 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 .chat-chip { position: relative; flex-shrink: 0; background: var(--bg3); border: 1px solid var(--border); color: var(--text2); border-radius: 16px; padding: 6px 12px; font-size: 13px; font-family: var(--font); cursor: pointer; white-space: nowrap; }
 .chat-chip-active { background: var(--accent); color: #fff; border-color: var(--accent); }
 .chat-chip-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--red); margin-left: 6px; vertical-align: middle; }
+/* Фото в чате */
+.chat-attach { background: var(--bg3); color: var(--text2); border: 1px solid var(--border); border-radius: 50%; width: 40px; height: 40px; font-size: 17px; cursor: pointer; flex-shrink: 0; }
+.chat-img { display: block; max-width: 200px; max-height: 240px; width: auto; border-radius: 10px; margin: 2px 0; cursor: pointer; }
+.chat-img-load { width: 160px; height: 110px; border-radius: 10px; background: var(--bg3); display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--text3); }
+.chat-lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.9); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 16px; }
+.chat-lightbox img { max-width: 100%; max-height: 100%; border-radius: 8px; }
 #reportView { display:none; position:fixed; inset:0; z-index:500; background:#fff; color:#111; overflow:auto; -webkit-overflow-scrolling:touch; }
 #reportView table { width:100%; border-collapse:collapse; font-size:13px; margin-top:6px; }
 #reportView th, #reportView td { border:1px solid #d0d0d0; padding:6px 8px; text-align:left; }
@@ -614,7 +620,7 @@ function closeIosInstall() { const m = document.getElementById('iosInstall'); if
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; maybeShowInstall(); });
 window.addEventListener('appinstalled', () => { deferredInstall = null; maybeShowInstall(); showToast('✅ Приложение установлено'); });
 
-const APP_VERSION = 'v40'; // видимая метка версии — должна совпадать с кэшем в sw.js
+const APP_VERSION = 'v41'; // видимая метка версии — должна совпадать с кэшем в sw.js
 function updateOfflineBanner() {
   const banner = document.getElementById('offlineBanner');
   banner.classList.toggle('show', !state.isOnline);
@@ -1292,6 +1298,8 @@ async function syncEntry(entry) {
 let chatPollTimer = null;
 let bgPollTimer = null;
 let chatOverviewTimer = null;
+const chatImgCache = {};        // id сообщения -> dataURL картинки
+const chatImgInflight = new Set(); // какие картинки уже грузим
 let chatLastRenderedId = null;
 
 function escapeText(t) {
@@ -1382,6 +1390,8 @@ function renderChat(c) {
     <div class="chat-list" id="chatMessages"></div>
     <button class="chat-jump" id="chatJump" onclick="scrollChatBottom()" style="display:none">↓ новые сообщения</button>
     <div class="chat-input-bar">
+      <input type="file" id="chatPhotoInput" accept="image/*" style="display:none" onchange="chatPhotoSelected(this)">
+      <button class="chat-attach" onclick="chatPickPhoto()" aria-label="Фото">📷</button>
       <input id="chatInput" placeholder="Сообщение..." autocomplete="off" onkeydown="if(event.key==='Enter')sendMessage()">
       <button class="chat-send" onclick="sendMessage()">➤</button>
     </div>`;
@@ -1423,7 +1433,8 @@ function renderChatMessages(forceScroll) {
     }
     html += `<div class="chat-msg ${mine ? 'chat-mine' : 'chat-other'}">
       <div class="chat-meta">${crown}${escapeText(m.userName || 'Без имени')} · ${time}${status}</div>
-      ${linkify(escapeText(m.text))}
+      ${(m.image || m.hasImage) ? chatImgHtml(m) : ''}
+      ${m.text ? linkify(escapeText(m.text)) : ''}
     </div>`;
   });
   box.innerHTML = html;
@@ -1489,7 +1500,7 @@ async function deliverMsg(msg) {
     const res = await fetch(`${API_URL}/api/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
-      body: JSON.stringify({ id: msg.id, text: msg.text, ts: msg.ts, objectId: msg.objectId || '' }),
+      body: JSON.stringify({ id: msg.id, text: msg.text, ts: msg.ts, objectId: msg.objectId || '', image: msg.image || '' }),
     });
     if (!res.ok) throw new Error('http');
     setMsgStatus(msg.id, 'sent');
@@ -1508,6 +1519,83 @@ function retrySend(id) {
   m.status = 'sending';
   renderChatMessages(false);
   deliverMsg(m);
+}
+
+// ─── Фото в чате ───
+function chatPickPhoto() {
+  if (!state.isOnline) { showToast('Для отправки фото нужен интернет'); return; }
+  const inp = document.getElementById('chatPhotoInput');
+  if (inp) inp.click();
+}
+function chatPhotoSelected(input) {
+  const file = input.files && input.files[0];
+  input.value = '';
+  if (!file) return;
+  if (!state.isOnline) { showToast('Для отправки фото нужен интернет'); return; }
+  showToast('Готовлю фото…');
+  compressImage(file, dataUrl => {
+    if (!dataUrl) { showToast('Не удалось обработать фото'); return; }
+    sendPhoto(dataUrl);
+  });
+}
+// Ужимаем фото на телефоне: до 1280px по большей стороне, JPEG. Если великовато — сильнее.
+function compressImage(file, cb) {
+  const img = new Image();
+  const reader = new FileReader();
+  reader.onload = () => { img.onload = () => {
+    let { width: w, height: h } = img;
+    const max = 1280;
+    if (w > h && w > max) { h = Math.round(h * max / w); w = max; }
+    else if (h >= w && h > max) { w = Math.round(w * max / h); h = max; }
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+    let q = 0.7, out = canvas.toDataURL('image/jpeg', q);
+    while (out.length > 1800000 && q > 0.4) { q -= 0.15; out = canvas.toDataURL('image/jpeg', q); }
+    cb(out);
+  }; img.onerror = () => cb(null); img.src = reader.result; };
+  reader.onerror = () => cb(null);
+  reader.readAsDataURL(file);
+}
+function sendPhoto(dataUrl) {
+  const input = document.getElementById('chatInput');
+  const caption = input ? input.value.trim() : '';
+  if (input) input.value = '';
+  const id = 'msg' + Date.now() + Math.floor(Math.random() * 1000);
+  chatImgCache[id] = dataUrl; // показываем сразу из локального кэша
+  const msg = { id, text: caption, ts: Date.now(), userName: myName(), role: state.user?.role, objectId: state.chatChannel || '', image: dataUrl, hasImage: true, status: 'sending' };
+  state.pendingMsgs = state.pendingMsgs || [];
+  state.pendingMsgs.push(msg);
+  renderChatMessages(true);
+  deliverMsg(msg);
+}
+function chatImgHtml(m) {
+  const src = chatImgCache[m.id] || m.image || '';
+  if (src) return `<img class="chat-img" src="${src}" onclick="openChatImage('${m.id}')" alt="фото">`;
+  ensureChatImage(m.id);
+  return `<div class="chat-img-load">Загрузка фото…</div>`;
+}
+async function ensureChatImage(id) {
+  if (chatImgCache[id] || chatImgInflight.has(id) || !state.isOnline || !state.user?.token) return;
+  chatImgInflight.add(id);
+  try {
+    const res = await fetch(`${API_URL}/api/message-image/${encodeURIComponent(id)}`, { headers: { 'Authorization': `Bearer ${state.user.token}` } });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.image) { chatImgCache[id] = data.image; if (state.currentScreen === 'chat') renderChatMessages(false); }
+    }
+  } catch {} finally { chatImgInflight.delete(id); }
+}
+function openChatImage(id) {
+  const src = chatImgCache[id];
+  if (!src) return;
+  const ov = document.createElement('div');
+  ov.className = 'chat-lightbox';
+  ov.onclick = () => ov.remove();
+  const img = document.createElement('img');
+  img.src = src;
+  ov.appendChild(img);
+  document.body.appendChild(ov);
 }
 
 const PROJECT_TYPES = ['СПС','СОУЭ','СОТС','СКУД','АППЗ','Другое'];
