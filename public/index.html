@@ -206,6 +206,11 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 .chat-img-load { width: 160px; height: 110px; border-radius: 10px; background: var(--bg3); display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--text3); }
 .chat-lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.9); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 16px; }
 .chat-lightbox img { max-width: 100%; max-height: 100%; border-radius: 8px; }
+/* Голосовые */
+.chat-voice { background: var(--bg3); color: var(--text); border: 1px solid var(--border); border-radius: 16px; padding: 7px 14px; font-size: 14px; font-family: var(--font); cursor: pointer; }
+.chat-mine .chat-voice { background: rgba(255,255,255,.18); color: #fff; border-color: rgba(255,255,255,.3); }
+@keyframes recpulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
+.rec-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--red); animation: recpulse 1s infinite; flex-shrink: 0; }
 #reportView { display:none; position:fixed; inset:0; z-index:500; background:#fff; color:#111; overflow:auto; -webkit-overflow-scrolling:touch; }
 #reportView table { width:100%; border-collapse:collapse; font-size:13px; margin-top:6px; }
 #reportView th, #reportView td { border:1px solid #d0d0d0; padding:6px 8px; text-align:left; }
@@ -620,7 +625,7 @@ function closeIosInstall() { const m = document.getElementById('iosInstall'); if
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; maybeShowInstall(); });
 window.addEventListener('appinstalled', () => { deferredInstall = null; maybeShowInstall(); showToast('✅ Приложение установлено'); });
 
-const APP_VERSION = 'v41'; // видимая метка версии — должна совпадать с кэшем в sw.js
+const APP_VERSION = 'v42'; // видимая метка версии — должна совпадать с кэшем в sw.js
 function updateOfflineBanner() {
   const banner = document.getElementById('offlineBanner');
   banner.classList.toggle('show', !state.isOnline);
@@ -1300,6 +1305,10 @@ let bgPollTimer = null;
 let chatOverviewTimer = null;
 const chatImgCache = {};        // id сообщения -> dataURL картинки
 const chatImgInflight = new Set(); // какие картинки уже грузим
+const chatAudioCache = {};       // id -> dataURL голосового
+const chatAudioInflight = new Set();
+let chatAudioPlaying = null;     // { id, audio } — что сейчас играет (JS-объект, переживает перерисовки)
+let mediaRec = null, recChunks = [], recTimer = null, recStart = 0, recSend = false, recStream = null, recMime = '';
 let chatLastRenderedId = null;
 
 function escapeText(t) {
@@ -1384,17 +1393,31 @@ function switchChatChannel(ch) {
   pollOverview();
 }
 
+function fmtDur(s) { s = Math.max(0, Math.round(s)); const m = Math.floor(s / 60); return m + ':' + String(s % 60).padStart(2, '0'); }
+
+function chatBarIdle() {
+  return `
+    <input type="file" id="chatPhotoInput" accept="image/*" style="display:none" onchange="chatPhotoSelected(this)">
+    <button class="chat-attach" onclick="chatPickPhoto()" aria-label="Фото">📷</button>
+    <input id="chatInput" placeholder="Сообщение..." autocomplete="off" onkeydown="if(event.key==='Enter')sendMessage()">
+    <button class="chat-attach" onclick="startVoice()" aria-label="Голосовое">🎤</button>
+    <button class="chat-send" onclick="sendMessage()">➤</button>`;
+}
+function chatBarRecording() {
+  return `
+    <button class="chat-attach" onclick="cancelVoice()" aria-label="Отмена">✕</button>
+    <div style="flex:1;display:flex;align-items:center;gap:8px;color:var(--red);font-size:14px;font-weight:600">
+      <span class="rec-dot"></span> Запись <span id="recTime">0:00</span>
+    </div>
+    <button class="chat-send" onclick="stopVoiceSend()" aria-label="Отправить">➤</button>`;
+}
+
 function renderChat(c) {
   c.innerHTML = `
     <div class="chat-channels" id="chatChannels">${channelChipsHtml()}</div>
     <div class="chat-list" id="chatMessages"></div>
     <button class="chat-jump" id="chatJump" onclick="scrollChatBottom()" style="display:none">↓ новые сообщения</button>
-    <div class="chat-input-bar">
-      <input type="file" id="chatPhotoInput" accept="image/*" style="display:none" onchange="chatPhotoSelected(this)">
-      <button class="chat-attach" onclick="chatPickPhoto()" aria-label="Фото">📷</button>
-      <input id="chatInput" placeholder="Сообщение..." autocomplete="off" onkeydown="if(event.key==='Enter')sendMessage()">
-      <button class="chat-send" onclick="sendMessage()">➤</button>
-    </div>`;
+    <div class="chat-input-bar" id="chatInputBar">${chatBarIdle()}</div>`;
   chatLastRenderedId = null;
   renderChatMessages(true);
 }
@@ -1434,6 +1457,7 @@ function renderChatMessages(forceScroll) {
     html += `<div class="chat-msg ${mine ? 'chat-mine' : 'chat-other'}">
       <div class="chat-meta">${crown}${escapeText(m.userName || 'Без имени')} · ${time}${status}</div>
       ${(m.image || m.hasImage) ? chatImgHtml(m) : ''}
+      ${(m.audio || m.hasAudio) ? chatAudioHtml(m) : ''}
       ${m.text ? linkify(escapeText(m.text)) : ''}
     </div>`;
   });
@@ -1500,7 +1524,7 @@ async function deliverMsg(msg) {
     const res = await fetch(`${API_URL}/api/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.user.token}` },
-      body: JSON.stringify({ id: msg.id, text: msg.text, ts: msg.ts, objectId: msg.objectId || '', image: msg.image || '' }),
+      body: JSON.stringify({ id: msg.id, text: msg.text, ts: msg.ts, objectId: msg.objectId || '', image: msg.image || '', audio: msg.audio || '', audioDur: msg.audioDur || 0 }),
     });
     if (!res.ok) throw new Error('http');
     setMsgStatus(msg.id, 'sent');
@@ -1596,6 +1620,86 @@ function openChatImage(id) {
   img.src = src;
   ov.appendChild(img);
   document.body.appendChild(ov);
+}
+
+// ─── Голосовые сообщения ───
+async function startVoice() {
+  if (!state.isOnline) { showToast('Для голосового нужен интернет'); return; }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === 'undefined') { showToast('Запись не поддерживается на этом устройстве'); return; }
+  try { recStream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch { showToast('Нет доступа к микрофону'); return; }
+  recChunks = []; recSend = false;
+  recMime = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm'
+          : (MediaRecorder.isTypeSupported('audio/mp4') ? 'audio/mp4' : '');
+  try { mediaRec = recMime ? new MediaRecorder(recStream, { mimeType: recMime }) : new MediaRecorder(recStream); }
+  catch { mediaRec = new MediaRecorder(recStream); }
+  mediaRec.ondataavailable = e => { if (e.data && e.data.size) recChunks.push(e.data); };
+  mediaRec.onstop = onVoiceStop;
+  mediaRec.start();
+  recStart = Date.now();
+  const bar = document.getElementById('chatInputBar'); if (bar) bar.innerHTML = chatBarRecording();
+  recTimer = setInterval(() => {
+    const s = Math.floor((Date.now() - recStart) / 1000);
+    const el = document.getElementById('recTime'); if (el) el.textContent = fmtDur(s);
+    if (s >= 180) stopVoiceSend(); // максимум 3 минуты
+  }, 500);
+}
+function stopVoiceSend() { recSend = true; finishRec(); }
+function cancelVoice() { recSend = false; finishRec(); }
+function finishRec() {
+  if (recTimer) { clearInterval(recTimer); recTimer = null; }
+  try { if (mediaRec && mediaRec.state !== 'inactive') mediaRec.stop(); } catch {}
+  const bar = document.getElementById('chatInputBar'); if (bar) bar.innerHTML = chatBarIdle();
+}
+function onVoiceStop() {
+  const dur = Math.round((Date.now() - recStart) / 1000);
+  if (recStream) { recStream.getTracks().forEach(t => t.stop()); recStream = null; }
+  const send = recSend; recSend = false;
+  const blob = new Blob(recChunks, { type: recMime || 'audio/webm' }); recChunks = [];
+  if (!send || !blob.size || dur < 1) return;
+  const reader = new FileReader();
+  reader.onload = () => sendVoice(reader.result, dur);
+  reader.onerror = () => showToast('Не удалось обработать запись');
+  reader.readAsDataURL(blob);
+}
+function sendVoice(dataUrl, dur) {
+  if (dataUrl.length > 6000000) { showToast('Запись слишком длинная'); return; }
+  const id = 'msg' + Date.now() + Math.floor(Math.random() * 1000);
+  chatAudioCache[id] = dataUrl;
+  const msg = { id, text: '', ts: Date.now(), userName: myName(), role: state.user?.role, objectId: state.chatChannel || '', audio: dataUrl, audioDur: dur, hasAudio: true, status: 'sending' };
+  state.pendingMsgs = state.pendingMsgs || [];
+  state.pendingMsgs.push(msg);
+  renderChatMessages(true);
+  deliverMsg(msg);
+}
+function chatAudioHtml(m) {
+  const dur = m.audioDur ? fmtDur(m.audioDur) : '';
+  const playing = chatAudioPlaying && chatAudioPlaying.id === m.id;
+  return `<button class="chat-voice" id="vbtn-${m.id}" data-dur="${dur}" onclick="playChatAudio('${m.id}')">${playing ? '⏸' : '▶'} Голос${dur ? ' · ' + dur : ''}</button>`;
+}
+function updateVoiceBtn(id, playing) {
+  const b = document.getElementById('vbtn-' + id);
+  if (b) b.textContent = (playing ? '⏸' : '▶') + ' Голос' + (b.dataset.dur ? ' · ' + b.dataset.dur : '');
+}
+async function playChatAudio(id) {
+  if (chatAudioPlaying && chatAudioPlaying.id === id) { chatAudioPlaying.audio.pause(); chatAudioPlaying = null; updateVoiceBtn(id, false); return; }
+  if (chatAudioPlaying) { const old = chatAudioPlaying.id; chatAudioPlaying.audio.pause(); chatAudioPlaying = null; updateVoiceBtn(old, false); }
+  await ensureChatAudio(id);
+  const src = chatAudioCache[id];
+  if (!src) { showToast('Не удалось загрузить голосовое'); return; }
+  const audio = new Audio(src);
+  chatAudioPlaying = { id, audio };
+  updateVoiceBtn(id, true);
+  audio.onended = () => { if (chatAudioPlaying && chatAudioPlaying.id === id) chatAudioPlaying = null; updateVoiceBtn(id, false); };
+  audio.play().catch(() => { if (chatAudioPlaying && chatAudioPlaying.id === id) chatAudioPlaying = null; updateVoiceBtn(id, false); showToast('Не удалось воспроизвести'); });
+}
+async function ensureChatAudio(id) {
+  if (chatAudioCache[id] || chatAudioInflight.has(id) || !state.isOnline || !state.user?.token) return;
+  chatAudioInflight.add(id);
+  try {
+    const res = await fetch(`${API_URL}/api/message-audio/${encodeURIComponent(id)}`, { headers: { 'Authorization': `Bearer ${state.user.token}` } });
+    if (res.ok) { const data = await res.json(); if (data.audio) chatAudioCache[id] = data.audio; }
+  } catch {} finally { chatAudioInflight.delete(id); }
 }
 
 const PROJECT_TYPES = ['СПС','СОУЭ','СОТС','СКУД','АППЗ','Другое'];
