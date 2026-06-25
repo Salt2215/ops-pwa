@@ -7,6 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="ОПС Журнал">
 <meta name="theme-color" content="#0a0a14">
+<script>(function(){try{var p=localStorage.getItem('ops_theme')||'system';var t=(p==='light'||p==='dark')?p:((window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark');document.documentElement.setAttribute('data-theme',t);if(t==='light'){var m=document.querySelector('meta[name="theme-color"]');if(m)m.setAttribute('content','#ffffff');}}catch(e){}})();</script>
 <link rel="manifest" href="/manifest.json">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <title>ОПС Журнал</title>
@@ -31,6 +32,21 @@
   --mono: 'JetBrains Mono', monospace;
   --radius: 14px;
   --radius-sm: 8px;
+}
+:root[data-theme="light"] {
+  --bg: #f4f5f8;
+  --bg2: #ffffff;
+  --bg3: #eceef3;
+  --border: #e2e5ec;
+  --border2: #cdd2dd;
+  --accent: #3a66e8;
+  --accent2: #2f57c8;
+  --green: #1f9d57;
+  --yellow: #c77f0a;
+  --red: #d63a2c;
+  --text: #1a1a2e;
+  --text2: #5a5f78;
+  --text3: #8a8fa6;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: var(--font); }
@@ -625,7 +641,7 @@ function closeIosInstall() { const m = document.getElementById('iosInstall'); if
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; maybeShowInstall(); });
 window.addEventListener('appinstalled', () => { deferredInstall = null; maybeShowInstall(); showToast('✅ Приложение установлено'); });
 
-const APP_VERSION = 'v42'; // видимая метка версии — должна совпадать с кэшем в sw.js
+const APP_VERSION = 'v43'; // видимая метка версии — должна совпадать с кэшем в sw.js
 function updateOfflineBanner() {
   const banner = document.getElementById('offlineBanner');
   banner.classList.toggle('show', !state.isOnline);
@@ -799,6 +815,32 @@ function entryCardHtml(e) {
 }
 
 // ─── Profile (role toggle + team management) ───
+// ─── Тема оформления ───
+function curThemePref() { return localStorage.getItem('ops_theme') || 'system'; }
+function resolveTheme(pref) {
+  if (pref === 'light' || pref === 'dark') return pref;
+  return (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
+}
+function applyTheme() {
+  const t = resolveTheme(curThemePref());
+  document.documentElement.setAttribute('data-theme', t);
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', t === 'light' ? '#ffffff' : '#0a0a14');
+}
+function setTheme(pref) {
+  localStorage.setItem('ops_theme', pref);
+  applyTheme();
+  if (state.currentScreen === 'profile') renderScreen('profile');
+}
+function themeCardHtml() {
+  const p = curThemePref();
+  const opt = (val, label) => `<button class="btn btn-sm ${p === val ? 'btn-primary' : 'btn-secondary'}" style="flex:1" onclick="setTheme('${val}')">${label}</button>`;
+  return `<div class="card" style="margin:0 0 12px">
+    <div class="card-title">Оформление</div>
+    <div style="display:flex;gap:8px">${opt('system', 'Системная')}${opt('light', 'Светлая')}${opt('dark', 'Тёмная')}</div>
+  </div>`;
+}
+
 function renderProfile(c) {
   const mine = isEngineer() ? state.entries : state.entries.filter(e => e.userName === myName());
   const totalCable = mine.reduce((s,e) => s+(parseInt(e.cable)||0), 0);
@@ -813,6 +855,8 @@ function renderProfile(c) {
         <div style="font-size:18px;font-weight:600">${myName()}</div>
         <div style="font-size:13px;color:var(--text3);margin-top:4px">${isEngineer()?'Инженер':'Монтажник'}</div>
       </div>
+
+      ${themeCardHtml()}
 
       ${isEngineer() ? (() => {
         const engineers = state.team.filter(isEngRole);
@@ -3048,6 +3092,10 @@ function showToast(msg, duration = 2500) {
 
 // ─── Init ───
 function init() {
+  applyTheme();
+  if (window.matchMedia) {
+    try { window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (curThemePref() === 'system') applyTheme(); }); } catch {}
+  }
   if ('serviceWorker' in navigator) { navigator.serviceWorker.register('/sw.js').catch(() => {}); }
   maybeShowInstall();
   if (!state.user || !state.user.token) {
