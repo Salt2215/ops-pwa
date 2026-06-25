@@ -153,6 +153,8 @@ async function initDB() {
     ALTER TABLE pwa_objects ADD COLUMN IF NOT EXISTS assigned_to TEXT DEFAULT '';
     ALTER TABLE pwa_messages ADD COLUMN IF NOT EXISTS object_id TEXT;
     ALTER TABLE pwa_messages ADD COLUMN IF NOT EXISTS image TEXT;
+    ALTER TABLE pwa_messages ADD COLUMN IF NOT EXISTS audio TEXT;
+    ALTER TABLE pwa_messages ADD COLUMN IF NOT EXISTS audio_dur INT DEFAULT 0;
     ALTER TABLE pwa_team    ADD COLUMN IF NOT EXISTS login_code TEXT;
     ALTER TABLE pwa_entries ADD COLUMN IF NOT EXISTS user_name TEXT;
     ALTER TABLE pwa_shleyfy ADD COLUMN IF NOT EXISTS pin_x REAL;
@@ -701,8 +703,8 @@ app.post('/api/drawings/delete', auth, async (req, res) => {
 // Монтажник видит общий канал и каналы только своих объектов; инженер — все.
 // Фото хранится в pwa_messages.image, но в списке НЕ отдаётся (только флаг hasImage),
 // сама картинка тянется по тапу через /api/message-image/:id (как чертежи).
-const MSG_COLS = "id, user_name, role, text, ts, object_id, (image IS NOT NULL AND image <> '') AS has_image";
-const mapMsg = m => ({ id: m.id, userName: m.user_name, role: m.role, text: m.text, ts: m.ts, objectId: m.object_id || '', hasImage: !!m.has_image });
+const MSG_COLS = "id, user_name, role, text, ts, object_id, (image IS NOT NULL AND image <> '') AS has_image, (audio IS NOT NULL AND audio <> '') AS has_audio, audio_dur";
+const mapMsg = m => ({ id: m.id, userName: m.user_name, role: m.role, text: m.text, ts: m.ts, objectId: m.object_id || '', hasImage: !!m.has_image, hasAudio: !!m.has_audio, audioDur: m.audio_dur || 0 });
 
 async function canAccessObject(user, objectId) {
   if (isEngineer(user)) return true;
@@ -730,12 +732,15 @@ app.post('/api/messages', auth, async (req, res) => {
     const { id, text, ts } = req.body;
     const objectId = (req.body.objectId || '').trim();
     const image = typeof req.body.image === 'string' ? req.body.image : '';
-    if ((!text || !text.trim()) && !image) return res.status(400).json({ error: 'empty' });
+    const audio = typeof req.body.audio === 'string' ? req.body.audio : '';
+    const audioDur = parseInt(req.body.audioDur) || 0;
+    if ((!text || !text.trim()) && !image && !audio) return res.status(400).json({ error: 'empty' });
     if (image && image.length > 6000000) return res.status(413).json({ error: 'image too large' });
+    if (audio && audio.length > 6000000) return res.status(413).json({ error: 'audio too large' });
     if (objectId && !(await canAccessObject(req.user, objectId))) return res.status(403).json({ error: 'forbidden' });
     await pool.query(
-      'INSERT INTO pwa_messages (id,uid,user_name,role,text,ts,object_id,image) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (id) DO NOTHING',
-      [id, req.user.uid, req.user.name, req.user.role, (text || '').trim().slice(0, 2000), ts || Date.now(), objectId || null, image || null]
+      'INSERT INTO pwa_messages (id,uid,user_name,role,text,ts,object_id,image,audio,audio_dur) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (id) DO NOTHING',
+      [id, req.user.uid, req.user.name, req.user.role, (text || '').trim().slice(0, 2000), ts || Date.now(), objectId || null, image || null, audio || null, audioDur]
     );
     res.json({ ok: true });
   } catch (e) { console.error(e); res.status(500).json({ error: e.message }); }
@@ -748,6 +753,16 @@ app.get('/api/message-image/:id', auth, async (req, res) => {
     if (!rows[0]) return res.status(404).json({ error: 'not found' });
     if (rows[0].object_id && !(await canAccessObject(req.user, rows[0].object_id))) return res.status(403).json({ error: 'forbidden' });
     res.json({ id: req.params.id, image: rows[0].image || '' });
+  } catch (e) { console.error(e); res.status(500).json({ error: e.message }); }
+});
+
+// Голосовое — отдаём по требованию (та же проверка доступа)
+app.get('/api/message-audio/:id', auth, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT object_id, audio FROM pwa_messages WHERE id=$1', [req.params.id]);
+    if (!rows[0]) return res.status(404).json({ error: 'not found' });
+    if (rows[0].object_id && !(await canAccessObject(req.user, rows[0].object_id))) return res.status(403).json({ error: 'forbidden' });
+    res.json({ id: req.params.id, audio: rows[0].audio || '' });
   } catch (e) { console.error(e); res.status(500).json({ error: e.message }); }
 });
 
