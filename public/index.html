@@ -643,7 +643,7 @@ function closeIosInstall() { const m = document.getElementById('iosInstall'); if
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; maybeShowInstall(); });
 window.addEventListener('appinstalled', () => { deferredInstall = null; maybeShowInstall(); showToast('✅ Приложение установлено'); });
 
-const APP_VERSION = 'v44'; // видимая метка версии — должна совпадать с кэшем в sw.js
+const APP_VERSION = 'v45'; // видимая метка версии — должна совпадать с кэшем в sw.js
 function updateOfflineBanner() {
   const banner = document.getElementById('offlineBanner');
   banner.classList.toggle('show', !state.isOnline);
@@ -2272,6 +2272,7 @@ function planImgHtml(objId, eng) {
     </div>`;
 }
 function planClick(ev, objId) {
+  if (pinchState || Date.now() - lastPinchEnd < 350) return; // не реагируем на тап во время/сразу после щипка
   const img = ev.currentTarget;
   const rect = img.getBoundingClientRect();
   const x = Math.max(0, Math.min(100, ((ev.clientX - rect.left) / rect.width) * 100));
@@ -2332,8 +2333,57 @@ function closePlanViewer() {
   if (currentViewerObj) renderPlanBox(currentViewerObj);
 }
 function zoomViewer(f) {
-  viewerZoom = Math.max(1, Math.min(6, viewerZoom * f));
+  viewerZoom = Math.max(1, Math.min(12, viewerZoom * f));
   renderPlanViewer(currentViewerObj);
+}
+// ─── Зум чертежа двумя пальцами (pinch) ───
+let pinchState = null;
+let lastPinchEnd = 0;
+function setupPlanPinch() {
+  const scroll = document.getElementById('planScroll');
+  const wrap = document.getElementById('planWrap');
+  if (!scroll || !wrap) return;
+  scroll.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 2) {
+      const [a, b] = e.touches;
+      const rect = scroll.getBoundingClientRect();
+      pinchState = {
+        startDist: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY),
+        startZoom: viewerZoom,
+        midX: (a.clientX + b.clientX) / 2 - rect.left,
+        midY: (a.clientY + b.clientY) / 2 - rect.top,
+      };
+    }
+  }, { passive: true });
+  scroll.addEventListener('touchmove', (e) => {
+    if (pinchState && e.touches.length === 2) {
+      e.preventDefault(); // забираем щипок себе, не даём странного панорамирования
+      const [a, b] = e.touches;
+      const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+      let z = pinchState.startZoom * (dist / pinchState.startDist);
+      z = Math.max(1, Math.min(12, z));
+      applyLiveZoom(z, pinchState.midX, pinchState.midY);
+    }
+  }, { passive: false });
+  scroll.addEventListener('touchend', (e) => {
+    if (pinchState && e.touches.length < 2) { pinchState = null; lastPinchEnd = Date.now(); }
+  }, { passive: true });
+}
+// Меняем зум «вживую» (без перерисовки), удерживая точку между пальцами на месте
+function applyLiveZoom(z, focalX, focalY) {
+  const scroll = document.getElementById('planScroll');
+  const wrap = document.getElementById('planWrap');
+  if (!scroll || !wrap) return;
+  const oldZoom = viewerZoom || 1;
+  const ratio = z / oldZoom;
+  const contentX = scroll.scrollLeft + focalX;
+  const contentY = scroll.scrollTop + focalY;
+  viewerZoom = z;
+  wrap.style.width = (z * 100) + '%';
+  scroll.scrollLeft = contentX * ratio - focalX;
+  scroll.scrollTop = contentY * ratio - focalY;
+  const lbl = document.getElementById('zoomLabel');
+  if (lbl) lbl.textContent = Math.round(z * 100) + '%';
 }
 function renderPlanViewer(objId) {
   const c = document.getElementById('planViewerContent');
@@ -2346,7 +2396,8 @@ function renderPlanViewer(objId) {
       <button class="btn btn-secondary btn-sm" onclick="closePlanViewer()">✕</button>
       <button class="btn btn-secondary btn-sm" onclick="zoomViewer(0.66)">−</button>
       <button class="btn btn-secondary btn-sm" onclick="zoomViewer(1.5)">+</button>
-      <span style="font-size:12px;color:var(--text3)">${Math.round(viewerZoom*100)}%</span>
+      <span id="zoomLabel" style="font-size:12px;color:var(--text3)">${Math.round(viewerZoom*100)}%</span>
+      <span style="font-size:11px;color:var(--text3)">· два пальца для зума</span>
       <div style="flex:1"></div>
       ${drawing
         ? `<button class="btn btn-secondary btn-sm" onclick="stopDrawingSeg('${objId}')">✕ Выйти</button>`
@@ -2354,7 +2405,7 @@ function renderPlanViewer(objId) {
     </div>
     ${drawing ? `<div style="padding:6px 12px;background:var(--bg2);color:#e8841a;font-size:13px;text-align:center;flex-shrink:0">Целься прицелом и жми «＋ Точка» внизу (или тапай по плану). Точек: <span class="seg-count">${segPoints.length}</span></div>` : ''}
     <div id="planScroll" style="flex:1;overflow:auto;background:var(--bg);-webkit-overflow-scrolling:touch">
-      <div style="position:relative;width:${viewerZoom*100}%;line-height:0">
+      <div id="planWrap" style="position:relative;width:${viewerZoom*100}%;line-height:0">
         <img src="${planCache[activeDid(objId)]}" onclick="planClick(event,'${objId}')" style="width:100%;display:block;cursor:${drawing?'crosshair':'default'}">
         ${segOverlaySvg(objId)}
         <div class="pins-ov" style="position:absolute;inset:0;pointer-events:none">${pinsOverlayHtml(objId, drawing)}</div>
@@ -2368,6 +2419,7 @@ function renderPlanViewer(objId) {
     </div>` : ''}`;
   const ns = document.getElementById('planScroll');
   if (ns) { ns.scrollLeft = sx; ns.scrollTop = sy; } // вернуть прокрутку на место
+  setupPlanPinch();
   if (drawing && ns) {
     // прицел по центру видимой области — точка ставится сюда, палец не мешает
     c.insertAdjacentHTML('beforeend',
@@ -2717,7 +2769,7 @@ function handlePlanFile(ev) {
   reader.onload = () => {
     const img = new Image();
     img.onload = () => {
-      const maxW = 2400;
+      const maxW = 3200;
       const scale = Math.min(1, maxW / img.width);
       const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
       const canvas = document.createElement('canvas');
@@ -2725,7 +2777,7 @@ function handlePlanFile(ev) {
       const ctx = canvas.getContext('2d');
       ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);
       ctx.drawImage(img, 0, 0, w, h);
-      const url = canvas.toDataURL('image/jpeg', 0.82);
+      const url = canvas.toDataURL('image/jpeg', 0.9);
       if (split) {
         // «Добавить чертёж» — создаём новый чертёж только сейчас, когда файл выбран
         const n = drawingsForObject(objId).length + 1;
@@ -2750,7 +2802,7 @@ function renderPdfPlan(file, objId, split) {
     const base = page.getViewport({ scale: 1 });
     let scale = targetW / base.width;
     const longest = Math.max(base.width, base.height) * scale;
-    if (longest > 4000) scale *= 4000 / longest; // защита памяти на больших листах
+    if (longest > 5200) scale *= 5200 / longest; // защита памяти на больших листах
     const vp = page.getViewport({ scale });
     const canvas = document.createElement('canvas');
     canvas.width = Math.round(vp.width);
@@ -2759,7 +2811,7 @@ function renderPdfPlan(file, objId, split) {
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     return page.render({ canvasContext: ctx, viewport: vp }).promise.then(() => {
-      const url = canvas.toDataURL('image/jpeg', 0.85);
+      const url = canvas.toDataURL('image/jpeg', 0.92);
       canvas.width = canvas.height = 0; // освобождаем память сразу
       return url;
     });
@@ -2771,12 +2823,12 @@ function renderPdfPlan(file, objId, split) {
       const total = pdf.numPages;
       // РЕЖИМ ЗАМЕНЫ (split=false): только 1-я страница в активный чертёж
       if (!split) {
-        return renderOne(pdf, 1, 3000).then(url => savePlanDataUrl(objId, url));
+        return renderOne(pdf, 1, 3600).then(url => savePlanDataUrl(objId, url));
       }
       // РЕЖИМ ДОБАВЛЕНИЯ, одна страница → один новый чертёж «Чертёж N»
       if (total <= 1) {
         const n = drawingsForObject(objId).length + 1;
-        return renderOne(pdf, 1, 3000)
+        return renderOne(pdf, 1, 3600)
           .then(url => addPageDrawing(objId, 'Чертёж ' + n, url, true, Date.now()))
           .then(() => renderPlanBox(objId));
       }
@@ -2787,7 +2839,7 @@ function renderPdfPlan(file, objId, split) {
       for (let k = 1; k <= total; k++) {
         const num = k;
         chain = chain
-          .then(() => renderOne(pdf, num, 2400))
+          .then(() => renderOne(pdf, num, 3000))
           .then(url => addPageDrawing(objId, 'Лист ' + num, url, num === 1, baseTs + num));
       }
       return chain.then(() => { renderPlanBox(objId); showToast(`✅ Загружено листов: ${total}`); });
