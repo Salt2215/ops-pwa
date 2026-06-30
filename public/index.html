@@ -162,6 +162,9 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 .modal { background: var(--bg2); border-radius: var(--radius) var(--radius) 0 0; border: 1px solid var(--border); width: 100%; max-height: 85vh; overflow-y: auto; padding: 20px 16px calc(20px + env(safe-area-inset-bottom)); }
 .modal-handle { width: 36px; height: 4px; background: var(--border2); border-radius: 2px; margin: 0 auto 16px; }
 .modal-title { font-size: 17px; font-weight: 600; margin-bottom: 16px; }
+/* Ярусы окон: полноэкранный чертёж — поверх карточки объекта; окна подтверждения — поверх чертежа */
+#planViewerModal { z-index: 150; }
+#segShleyfPickModal, #segDetailModal, #shleyfDetailModal, #deviceDetailModal, #devTypePickModal { z-index: 220; }
 
 /* Section header */
 .section-header { padding: 16px 14px 8px; font-size: 13px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .06em; }
@@ -643,7 +646,7 @@ function closeIosInstall() { const m = document.getElementById('iosInstall'); if
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; maybeShowInstall(); });
 window.addEventListener('appinstalled', () => { deferredInstall = null; maybeShowInstall(); showToast('✅ Приложение установлено'); });
 
-const APP_VERSION = 'v45'; // видимая метка версии — должна совпадать с кэшем в sw.js
+const APP_VERSION = 'v46'; // видимая метка версии — должна совпадать с кэшем в sw.js
 function updateOfflineBanner() {
   const banner = document.getElementById('offlineBanner');
   banner.classList.toggle('show', !state.isOnline);
@@ -2645,7 +2648,7 @@ function devicesOverlayHtml(objId, lock) {
     const col = DEV_COLORS[d.status] || DEV_COLORS.todo;
     const shape = devType(d.type).shape;
     return `<div onclick="event.stopPropagation();openDevice('${d.id}')" title="${devType(d.type).short} ${d.num||''}"
-      style="position:absolute;left:${d.x}%;top:${d.y}%;transform:translate(-50%,-50%);width:22px;height:22px;filter:drop-shadow(0 1px 3px rgba(0,0,0,.7));cursor:pointer;pointer-events:${lock?'none':'auto'}">${deviceShapeSvg(shape, col, d.num)}</div>`;
+      style="position:absolute;left:${d.x}%;top:${d.y}%;transform:translate(-50%,-50%);width:15px;height:15px;filter:drop-shadow(0 1px 3px rgba(0,0,0,.7));cursor:pointer;pointer-events:${lock?'none':'auto'}">${deviceShapeSvg(shape, col, d.num)}</div>`;
   }).join('');
 }
 // выбор типа прибора, потом — режим постановки
