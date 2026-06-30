@@ -88,6 +88,8 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 .status-paused { background: rgba(243,156,18,.15); color: var(--yellow); }
 .status-problem { background: rgba(231,76,60,.15); color: var(--red); }
 .status-done { background: rgba(144,144,176,.15); color: var(--text2); }
+.obj-filters { display: flex; gap: 6px; overflow-x: auto; padding: 10px 14px 2px; -webkit-overflow-scrolling: touch; }
+.obj-filters::-webkit-scrollbar { display: none; }
 .obj-meta { font-size: 12px; color: var(--text3); display: flex; gap: 12px; flex-wrap: wrap; }
 .obj-stat { display: flex; align-items: center; gap: 4px; }
 
@@ -641,7 +643,7 @@ function closeIosInstall() { const m = document.getElementById('iosInstall'); if
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; maybeShowInstall(); });
 window.addEventListener('appinstalled', () => { deferredInstall = null; maybeShowInstall(); showToast('✅ Приложение установлено'); });
 
-const APP_VERSION = 'v43'; // видимая метка версии — должна совпадать с кэшем в sw.js
+const APP_VERSION = 'v44'; // видимая метка версии — должна совпадать с кэшем в sw.js
 function updateOfflineBanner() {
   const banner = document.getElementById('offlineBanner');
   banner.classList.toggle('show', !state.isOnline);
@@ -739,30 +741,23 @@ function renderHome(c) {
 }
 
 // ─── Objects ───
-function renderObjects(c) {
-  const objs = visibleObjects();
-  if (objs.length === 0) {
-    c.innerHTML = `
-      <div class="empty"><div class="empty-icon">🏗</div><div class="empty-text">${isEngineer()?'Объектов пока нет.<br>Добавьте первый объект.':'Вам пока не назначен ни один объект.<br>Обратитесь к инженеру.'}</div></div>
-      ${isEngineer()?`<div style="padding:0 14px"><button class="btn btn-primary" onclick="showModal('addObjectModal')">+ Добавить объект</button></div>`:''}`;
-    return;
-  }
-  c.innerHTML = `
-    ${isEngineer()?`<div style="padding:14px 14px 0"><button class="btn btn-primary btn-sm" onclick="showModal('addObjectModal')">+ Новый объект</button></div>`:''}
-    ${objs.map(o => {
-      const entries = allEntries().filter(e => e.objectId === o.id);
-      const totalCable = entries.reduce((s,e) => s+(parseInt(e.cable)||0), 0);
-      const totalDevices = entries.reduce((s,e) => s+(parseInt(e.devices)||0), 0);
-      const pctCable = o.planCable > 0 ? Math.min(totalCable/o.planCable*100, 100) : 0;
-      const assignedCount = Array.isArray(o.assignedTo) ? o.assignedTo.length : 0;
-      return `
+let objSearch = '';
+let objFilter = 'all';
+
+function objCardHtml(o) {
+  const entries = allEntries().filter(e => e.objectId === o.id);
+  const totalCable = entries.reduce((s, e) => s + (parseInt(e.cable) || 0), 0);
+  const totalDevices = entries.reduce((s, e) => s + (parseInt(e.devices) || 0), 0);
+  const pctCable = o.planCable > 0 ? Math.min(totalCable / o.planCable * 100, 100) : 0;
+  const assignedCount = Array.isArray(o.assignedTo) ? o.assignedTo.length : 0;
+  return `
       <div class="obj-card" onclick="showObjectDetail('${o.id}')">
         <div class="obj-card-header">
-          <span class="obj-name">${o.name}</span>
-          <span class="status-pill status-${o.status}">${STATUS_LABELS[o.status]||o.status}</span>
+          <span class="obj-name">${escapeText(o.name)}</span>
+          <span class="status-pill status-${o.status}">${STATUS_LABELS[o.status] || o.status}</span>
         </div>
         <div class="obj-meta">
-          ${o.address ? `<span>📍 ${o.address}</span>` : ''}
+          ${o.address ? `<span>📍 ${escapeText(o.address)}</span>` : ''}
           ${isEngineer() ? `<span>👷 ${assignedCount}</span>` : ''}
           <span>🔌 ${totalCable} м</span>
           <span>📡 ${totalDevices} шт</span>
@@ -773,9 +768,55 @@ function renderObjects(c) {
           <div class="progress-bar"><div class="progress-fill" style="width:${pctCable}%"></div></div>
         </div>` : ''}
       </div>`;
-    }).join('')}
-    <div style="height:14px"></div>
+}
+
+function objFiltersHtml(all) {
+  const cnt = s => all.filter(o => o.status === s).length;
+  const f = (val, label, n) => `<button class="btn btn-sm ${objFilter === val ? 'btn-primary' : 'btn-secondary'}" style="flex-shrink:0" onclick="objSetFilter('${val}')">${label}${n != null ? ' (' + n + ')' : ''}</button>`;
+  return f('all', 'Все', all.length) + f('active', 'В работе', cnt('active')) + f('problem', 'Проблема', cnt('problem')) + f('paused', 'Пауза', cnt('paused')) + f('done', 'Готов', cnt('done'));
+}
+
+function renderObjList() {
+  const el = document.getElementById('objList');
+  if (!el) return;
+  let objs = visibleObjects();
+  if (objFilter !== 'all') objs = objs.filter(o => o.status === objFilter);
+  const q = objSearch.trim().toLowerCase();
+  if (q) objs = objs.filter(o => (o.name || '').toLowerCase().includes(q) || (o.address || '').toLowerCase().includes(q));
+  if (objs.length === 0) {
+    el.innerHTML = `<div class="empty" style="margin-top:24px"><div class="empty-icon">🔍</div><div class="empty-text">Ничего не найдено</div></div>`;
+    return;
+  }
+  el.innerHTML = objs.map(objCardHtml).join('') + '<div style="height:14px"></div>';
+}
+
+function objSearchInput(v) { objSearch = v; renderObjList(); }
+function objSetFilter(val) {
+  objFilter = val;
+  const fb = document.getElementById('objFilters');
+  if (fb) fb.innerHTML = objFiltersHtml(visibleObjects());
+  renderObjList();
+}
+
+function renderObjects(c) {
+  const objs = visibleObjects();
+  if (objs.length === 0) {
+    c.innerHTML = `
+      <div class="empty"><div class="empty-icon">🏗</div><div class="empty-text">${isEngineer()?'Объектов пока нет.<br>Добавьте первый объект.':'Вам пока не назначен ни один объект.<br>Обратитесь к инженеру.'}</div></div>
+      ${isEngineer()?`<div style="padding:0 14px"><button class="btn btn-primary" onclick="showModal('addObjectModal')">+ Добавить объект</button></div>`:''}`;
+    return;
+  }
+  c.innerHTML = `
+    ${isEngineer()?`<div style="padding:14px 14px 0"><button class="btn btn-primary btn-sm" onclick="showModal('addObjectModal')">+ Новый объект</button></div>`:''}
+    <div style="padding:12px 14px 0">
+      <input id="objSearch" class="form-input" placeholder="🔍 Поиск по названию или адресу" autocomplete="off" oninput="objSearchInput(this.value)">
+    </div>
+    <div class="obj-filters" id="objFilters">${objFiltersHtml(objs)}</div>
+    <div id="objList"></div>
   `;
+  const si = document.getElementById('objSearch');
+  if (si) si.value = objSearch;
+  renderObjList();
 }
 
 // ─── Journal ───
@@ -928,7 +969,7 @@ async function doLogin() {
     const data = await res.json();
     state.user = { token: data.token, name: data.name, role: data.role, teamId: data.teamId || null };
     // чистим локальные данные — дальше всё придёт с сервера по роли
-    state.objects = []; state.entries = []; state.pendingEntries = []; state.team = []; state.projects = []; state.messages = []; state.pendingMsgs = []; state.chatChannel = ''; state.chatOverview = []; localStorage.removeItem('ops_chat_channel'); clearChatSeen();
+    state.objects = []; state.entries = []; state.pendingEntries = []; state.team = []; state.projects = []; state.messages = []; state.pendingMsgs = []; state.chatChannel = ''; state.chatOverview = []; localStorage.removeItem('ops_chat_channel'); clearChatSeen(); objSearch = ''; objFilter = 'all';
     input.value = '';
     saveLocal();
     startApp();
