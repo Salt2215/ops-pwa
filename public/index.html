@@ -646,7 +646,7 @@ function closeIosInstall() { const m = document.getElementById('iosInstall'); if
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; maybeShowInstall(); });
 window.addEventListener('appinstalled', () => { deferredInstall = null; maybeShowInstall(); showToast('✅ Приложение установлено'); });
 
-const APP_VERSION = 'v46'; // видимая метка версии — должна совпадать с кэшем в sw.js
+const APP_VERSION = 'v47'; // видимая метка версии — должна совпадать с кэшем в sw.js
 function updateOfflineBanner() {
   const banner = document.getElementById('offlineBanner');
   banner.classList.toggle('show', !state.isOnline);
@@ -972,7 +972,7 @@ async function doLogin() {
     const data = await res.json();
     state.user = { token: data.token, name: data.name, role: data.role, teamId: data.teamId || null };
     // чистим локальные данные — дальше всё придёт с сервера по роли
-    state.objects = []; state.entries = []; state.pendingEntries = []; state.team = []; state.projects = []; state.messages = []; state.pendingMsgs = []; state.chatChannel = ''; state.chatOverview = []; localStorage.removeItem('ops_chat_channel'); clearChatSeen(); objSearch = ''; objFilter = 'all';
+    state.objects = []; state.entries = []; state.pendingEntries = []; state.team = []; state.projects = []; state.messages = []; state.pendingMsgs = []; state.chatChannel = ''; state.chatOverview = []; localStorage.removeItem('ops_chat_channel'); clearChatSeen(); clearChatCache(); objSearch = ''; objFilter = 'all';
     input.value = '';
     saveLocal();
     startApp();
@@ -1456,6 +1456,16 @@ function markChatSeen() {
 function clearChatSeen() {
   Object.keys(localStorage).filter(k => k.indexOf('ops_chat_seen') === 0).forEach(k => localStorage.removeItem(k));
 }
+// Кэш переписки по каналам — чтобы история была видна офлайн (только текст/метки, без байтов медиа)
+function saveChannelCache(ch, msgs) {
+  try { localStorage.setItem('ops_msgcache:' + (ch || ''), JSON.stringify((msgs || []).slice(-100))); } catch {}
+}
+function loadChannelCache(ch) {
+  try { return JSON.parse(localStorage.getItem('ops_msgcache:' + (ch || '')) || '[]'); } catch { return []; }
+}
+function clearChatCache() {
+  Object.keys(localStorage).filter(k => k.indexOf('ops_msgcache:') === 0).forEach(k => localStorage.removeItem(k));
+}
 
 function channelChipsHtml() {
   const cur = state.chatChannel || '';
@@ -1474,7 +1484,7 @@ function switchChatChannel(ch) {
   if ((state.chatChannel || '') === ch) { scrollChatBottom(); return; }
   state.chatChannel = ch;
   localStorage.setItem('ops_chat_channel', ch);
-  state.messages = [];          // придёт по выбранному каналу
+  state.messages = loadChannelCache(ch);   // мгновенно показываем сохранённую историю (в т.ч. офлайн)
   chatLastRenderedId = null;
   renderChat(document.getElementById('mainContent'));
   pollMessages();
@@ -1501,6 +1511,7 @@ function chatBarRecording() {
 }
 
 function renderChat(c) {
+  state.messages = loadChannelCache(state.chatChannel || ''); // история текущего канала (видна и офлайн)
   c.innerHTML = `
     <div class="chat-channels" id="chatChannels">${channelChipsHtml()}</div>
     <div class="chat-list" id="chatMessages"></div>
@@ -1573,6 +1584,7 @@ async function pollMessages() {
     if (!Array.isArray(data.messages)) return;
     if ((state.chatChannel || '') !== ch) return; // канал переключили, пока ждали ответ
     state.messages = data.messages;
+    saveChannelCache(ch, data.messages); // сохраняем для офлайн-просмотра
     const sids = new Set(data.messages.map(m => m.id));
     state.pendingMsgs = (state.pendingMsgs || []).filter(m => !sids.has(m.id));
     saveLocal();
